@@ -3,10 +3,11 @@
 An open-source, composable authentication framework project providing secure OAuth/OIDC integrations,
 designed as a reusable backbone for enterprise-grade applications.
 
-> ⚠️ **WARNING**: This project is currently a prototype template under construction and is not fit for production, or
+> ⚠️ **WARNING**: This project is currently a prototype under construction and is not fit for production, or
 > general usage, yet.
 
-Once we are production-ready, we'll keep development consistent, and most importantly, non-intrusive to your changes.
+Passage is distributed **package-first**: you depend on `@passage/core` and start from a runnable preset, rather
+than forking and diverging. That keeps upgrades non-intrusive to your configuration and code.
 
 **Why would you want to use Passage?**
 
@@ -18,6 +19,40 @@ Once we are production-ready, we'll keep development consistent, and most import
 
 > 📑 **Conceptual / Vision Diagram of Passage**
 > ![img.png](readme/media/conceptual-architectural-diagram.png)
+
+## How it's distributed
+
+Passage is a **bun-workspace monorepo**:
+
+```
+packages/
+  core/                 # @passage/core — the installable identity-broker core
+examples/
+  keycloak-basic/       # a runnable preset that federates a local Keycloak upstream
+```
+
+- **`@passage/core`** is the package you consume. Config is *injected* (it never reads your
+  working directory), so you build an `AppConfig` and mount the app:
+
+  ```ts
+  import { createApp } from '@passage/core';
+  import { loadAppConfig } from '@passage/core/config';
+
+  const app = await createApp(loadAppConfig('./config'));
+  app.listen(3000);
+  ```
+
+- **Presets** under `examples/` are full, runnable deployments. Copy one as your starting
+  point — it owns its `config/`, its KMS keystore, and its process lifecycle.
+
+Get the example running:
+
+```bash
+bun install
+task launch          # start the preset's Keycloak + datastore (docker-compose)
+task server:dev      # boot examples/keycloak-basic on :3000
+task test            # run the core suite (enforces 100% line/statement coverage)
+```
 
 ## Readme Directory
 

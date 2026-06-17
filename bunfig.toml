@@ -1,0 +1,23 @@
+[test]
+# Coverage is enforced as part of the suite at 100%. We gate on line + statement coverage
+# (every executable line and statement must run). Bun's *function* metric is intentionally
+# not gated: it counts each class's synthesized constructor as a distinct "function" and
+# never credits it as hit even when the class is instantiated — a reporter artifact, not a
+# real gap. Line + statement coverage confirm the code is fully exercised.
+# NOTE: Bun's threshold keys are singular (`line`, `statement`, `function`); the plural
+# forms are silently ignored.
+coverage = true
+coverageThreshold = 1.0
+coverageSkipTestFiles = true
+
+# Exclude things that are not unit-coverable application logic: the tests themselves,
+# pure type declarations, build output, deps, and the example presets (presets are
+# exercised by booting them, not by the core unit suite).
+coveragePathIgnorePatterns = [
+  "**/*.test.ts",
+  "**/tests/**",
+  "**/types/**",
+  "examples/**",
+  "dist/**",
+  "node_modules/**",
+]

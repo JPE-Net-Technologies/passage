@@ -6,7 +6,9 @@ This document outlines the vision and planned evolution of Passage from an ident
 
 ## Vision
 
-Passage is the **core identity layer** around which an ecosystem of declarative, sidecar functions and add-on packages can be composed. Think Firebase Functions riding alongside Firebase Auth - but forkable, self-hosted, and entirely configuration-driven.
+Passage is the **core identity layer** around which an ecosystem of declarative, sidecar functions and add-on packages can be composed. Think Firebase Functions riding alongside Firebase Auth - but installable, self-hosted, and entirely configuration-driven.
+
+**Distribution model:** Passage ships as the installable package **`@passage/core`** plus a set of runnable **presets** under `examples/`. You `bun add @passage/core`, inject your config, and mount the app — or copy a preset as a starting point and own it outright. Forking the core remains possible as a last-resort escape hatch, but it is not the path we expect or optimize for.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -39,9 +41,11 @@ Passage is the **core identity layer** around which an ecosystem of declarative,
 - [x] Structured logging system
 - [x] Docker Compose development environment (Keycloak, Postgres, MongoDB)
 - [x] OIDC type definitions and validation schemas
+- [x] **Package-first distribution**: bun-workspace monorepo — `@passage/core` (config injected, no cwd coupling) + runnable presets under `examples/`
+- [x] **100% line/statement coverage** gate on the core (`bunfig.toml`)
 - [ ] Core OIDC services (JWKS, Token, Session, Discovery)
 - [ ] OIDC route handlers
-- [ ] Upstream provider federation
+- [ ] Upstream provider federation (discovery wired; token/userinfo pending)
 
 ---
 
@@ -316,11 +320,11 @@ Plugin systems are brittle. Package ecosystems are composable. Each `@passage/*`
 - Optional (tree-shakeable)
 - Fork-friendly (vendor if needed)
 
-**4. Fork > Configure**
+**4. Configure first; fork only as an escape hatch**
 
 Keycloak has 500+ configuration options. That's not flexibility, that's complexity.
 
-Passage has clean, readable YAML and TypeScript. If the config doesn't support what you need, fork the code. The architecture makes forking safe.
+Passage's answer is the opposite of "just fork it": clean, declarative YAML validated by Zod, composed by an installable core (`@passage/core`) you depend on rather than copy. Start from a preset, inject your config, and add `@passage/*` packages for capabilities. Forking the core is a deliberate last resort for the rare case the seams don't reach — the architecture keeps it *safe*, but distribution is package-first, not fork-first.
 
 ---
 

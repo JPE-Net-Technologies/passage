@@ -1,0 +1,16 @@
+{
+  "name": "@passage-examples/keycloak-basic",
+  "version": "1.0.0",
+  "description": "Runnable Passage preset: federate a local Keycloak upstream via @passage/core.",
+  "private": true,
+  "scripts": {
+    "dev": "cross-env NODE_ENV=development bun run src/server.ts",
+    "start": "bun run src/server.ts"
+  },
+  "dependencies": {
+    "@passage/core": "workspace:*"
+  },
+  "devDependencies": {
+    "cross-env": "^10.1.0"
+  }
+}

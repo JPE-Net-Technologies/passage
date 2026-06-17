@@ -2,58 +2,36 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import crypto from 'crypto';
 import yaml from 'js-yaml';
 import { LocalKMS, SecretsConfigSchema } from '../services/kms-local';
 
-// Test file paths
-const TEST_KEYSTORE_FILE = path.join(process.cwd(), 'kms-local.keystore');
-const TEST_SECRETS_FILE = path.join(process.cwd(), 'config', 'template.secrets.yaml');
-
-// Helper to backup and restore files
-function backupFile(filePath: string): string | null {
-    if (fs.existsSync(filePath)) {
-        const content = fs.readFileSync(filePath, 'utf8');
-        return content;
-    }
-    return null;
-}
-
-function restoreFile(filePath: string, content: string | null): void {
-    if (content !== null) {
-        fs.writeFileSync(filePath, content, 'utf8');
-    } else if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-    }
-}
+// Each test gets an isolated temp dir and passes explicit paths to initialize(), so the
+// KMS never touches the working directory (the injected-paths seam under test).
+let TEST_DIR: string;
+let TEST_KEYSTORE_FILE: string;
+let TEST_SECRETS_FILE: string;
+let INIT_OPTS: { keystorePath: string; secretsPath: string };
 
 describe('LocalKMS Service', () => {
-    let keystoreBackup: string | null;
-    let secretsBackup: string | null;
     let kms: LocalKMS;
 
     beforeEach(() => {
-        // Backup existing files
-        keystoreBackup = backupFile(TEST_KEYSTORE_FILE);
-        secretsBackup = backupFile(TEST_SECRETS_FILE);
-
-        // Clean up test files
-        if (fs.existsSync(TEST_KEYSTORE_FILE)) {
-            fs.unlinkSync(TEST_KEYSTORE_FILE);
-        }
+        TEST_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'passage-kms-'));
+        TEST_KEYSTORE_FILE = path.join(TEST_DIR, 'kms-local.keystore');
+        TEST_SECRETS_FILE = path.join(TEST_DIR, 'template.secrets.yaml');
+        INIT_OPTS = { keystorePath: TEST_KEYSTORE_FILE, secretsPath: TEST_SECRETS_FILE };
 
         // Create fresh KMS instance
         kms = new LocalKMS();
     });
 
     afterEach(() => {
-        // Reset KMS
+        // Reset KMS and remove the temp dir
         kms.reset();
-
-        // Restore original files
-        restoreFile(TEST_KEYSTORE_FILE, keystoreBackup);
-        restoreFile(TEST_SECRETS_FILE, secretsBackup);
+        fs.rmSync(TEST_DIR, { recursive: true, force: true });
     });
 
     describe('Master Key Management', () => {
@@ -67,7 +45,7 @@ describe('LocalKMS Service', () => {
             };
             fs.writeFileSync(TEST_SECRETS_FILE, yaml.dump(testSecrets), 'utf8');
 
-            await kms.initialize();
+            await kms.initialize(INIT_OPTS);
 
             // Check keystore was created
             assert.ok(fs.existsSync(TEST_KEYSTORE_FILE), 'Keystore should be created');
@@ -87,7 +65,7 @@ describe('LocalKMS Service', () => {
             const testSecrets = { Secrets: [] };
             fs.writeFileSync(TEST_SECRETS_FILE, yaml.dump(testSecrets), 'utf8');
 
-            await kms.initialize();
+            await kms.initialize(INIT_OPTS);
 
             // Verify KMS initialized successfully
             assert.ok(kms.isInitialized(), 'KMS should be initialized');
@@ -103,7 +81,7 @@ describe('LocalKMS Service', () => {
             fs.writeFileSync(TEST_SECRETS_FILE, yaml.dump(testSecrets), 'utf8');
 
             await assert.rejects(
-                () => kms.initialize(),
+                () => kms.initialize(INIT_OPTS),
                 /Invalid master key length/,
                 'Should reject invalid key length'
             );
@@ -129,7 +107,7 @@ describe('LocalKMS Service', () => {
             };
             fs.writeFileSync(TEST_SECRETS_FILE, yaml.dump(testSecrets), 'utf8');
 
-            await kms.initialize();
+            await kms.initialize(INIT_OPTS);
 
             // Check secret is available in memory
             assert.ok(kms.hasSecret('TestSecret'), 'Secret should exist');
@@ -169,7 +147,7 @@ describe('LocalKMS Service', () => {
             };
             fs.writeFileSync(TEST_SECRETS_FILE, yaml.dump(testSecrets), 'utf8');
 
-            await kms.initialize();
+            await kms.initialize(INIT_OPTS);
 
             // Check secret was decrypted correctly
             assert.ok(kms.hasSecret('PreEncryptedSecret'), 'Secret should exist');
@@ -199,7 +177,7 @@ describe('LocalKMS Service', () => {
             };
             fs.writeFileSync(TEST_SECRETS_FILE, yaml.dump(testSecrets), 'utf8');
 
-            await kms.initialize();
+            await kms.initialize(INIT_OPTS);
 
             // Check only LocalKms secret was loaded
             assert.ok(kms.hasSecret('LocalSecret'), 'LocalKms secret should exist');
@@ -250,12 +228,12 @@ describe('LocalKMS Service', () => {
         });
 
         it('should return undefined for non-existent secret', async () => {
-            await kms.initialize();
+            await kms.initialize(INIT_OPTS);
             assert.strictEqual(kms.getSecret('NonExistent'), undefined, 'Should return undefined');
         });
 
         it('should return all secret names', async () => {
-            await kms.initialize();
+            await kms.initialize(INIT_OPTS);
 
             const names = kms.getSecretNames();
             assert.ok(names.includes('Secret1'), 'Should include Secret1');
@@ -264,16 +242,16 @@ describe('LocalKMS Service', () => {
         });
 
         it('should skip initialization if already initialized', async () => {
-            await kms.initialize();
+            await kms.initialize(INIT_OPTS);
             assert.ok(kms.isInitialized(), 'Should be initialized');
 
             // Second initialize should be a no-op
-            await kms.initialize();
+            await kms.initialize(INIT_OPTS);
             assert.ok(kms.isInitialized(), 'Should still be initialized');
         });
 
         it('should reset state correctly', async () => {
-            await kms.initialize();
+            await kms.initialize(INIT_OPTS);
             assert.ok(kms.isInitialized(), 'Should be initialized');
 
             kms.reset();
@@ -342,7 +320,7 @@ describe('LocalKMS Service', () => {
             }
 
             // Should initialize without error
-            await kms.initialize();
+            await kms.initialize(INIT_OPTS);
             assert.ok(kms.isInitialized(), 'Should be initialized');
             assert.strictEqual(kms.getSecretNames().length, 0, 'Should have no secrets');
         });
@@ -356,7 +334,7 @@ describe('LocalKMS Service', () => {
             const testSecrets = { Secrets: [] };
             fs.writeFileSync(TEST_SECRETS_FILE, yaml.dump(testSecrets), 'utf8');
 
-            await kms.initialize();
+            await kms.initialize(INIT_OPTS);
             assert.ok(kms.isInitialized(), 'Should be initialized');
             assert.strictEqual(kms.getSecretNames().length, 0, 'Should have no secrets');
         });
@@ -380,7 +358,7 @@ describe('LocalKMS Service', () => {
             fs.writeFileSync(TEST_SECRETS_FILE, yaml.dump(testSecrets), 'utf8');
 
             // Should initialize without error (just warn)
-            await kms.initialize();
+            await kms.initialize(INIT_OPTS);
             assert.ok(kms.isInitialized(), 'Should be initialized');
             assert.ok(!kms.hasSecret('IncompleteSecret'), 'Incomplete secret should not be loaded');
         });
@@ -404,7 +382,7 @@ describe('LocalKMS Service', () => {
             };
             fs.writeFileSync(TEST_SECRETS_FILE, yaml.dump(testSecrets), 'utf8');
 
-            await kms.initialize();
+            await kms.initialize(INIT_OPTS);
 
             assert.strictEqual(kms.getSecret('SpecialSecret'), specialValue, 'Special characters should be preserved');
         });
@@ -428,7 +406,7 @@ describe('LocalKMS Service', () => {
             };
             fs.writeFileSync(TEST_SECRETS_FILE, yaml.dump(testSecrets), 'utf8');
 
-            await kms.initialize();
+            await kms.initialize(INIT_OPTS);
 
             assert.strictEqual(kms.getSecret('UnicodeSecret'), unicodeValue, 'Unicode should be preserved');
         });

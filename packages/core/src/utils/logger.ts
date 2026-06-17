@@ -12,7 +12,7 @@ const LOG_LEVELS: LogLevel = {
   DEBUG: 3
 } as const;
 
-class Logger {
+export class Logger {
   private currentLevel: number;
 
   constructor() {

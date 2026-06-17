@@ -9,7 +9,20 @@ import helmet from "helmet";
 import cors from "cors";
 import compression from "compression";
 
-export default class CommonMiddleware implements MiddlewareComponent {
+/**
+ * Compression predicate: honour the `x-no-compression` opt-out header, otherwise defer to
+ * compression's default heuristic. Extracted so it is directly unit-testable.
+ */
+export function shouldCompress(req: express.Request, res: express.Response): boolean {
+  if (req.headers['x-no-compression']) {
+    return false;
+  }
+  return compression.filter(req, res);
+}
+
+export default class CommonMiddleware extends MiddlewareComponent {
+    constructor() { super(); }
+
     mount(app: express.Application): boolean {
       // CORS
       app.use(cors({
@@ -21,12 +34,7 @@ export default class CommonMiddleware implements MiddlewareComponent {
 
       // Compression
       app.use(compression({
-        filter: (req, res) => {
-          if (req.headers['x-no-compression']) {
-            return false;
-          }
-          return compression.filter(req, res);
-        },
+        filter: shouldCompress,
         threshold: 1024
       }));
 

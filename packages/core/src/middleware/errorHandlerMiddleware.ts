@@ -1,14 +1,16 @@
 import express, { Request, Response, NextFunction } from 'express';
 import MiddlewareComponent from "./middlewareComponent";
 
-export default class ErrorHandlerMiddleware implements MiddlewareComponent {
+export default class ErrorHandlerMiddleware extends MiddlewareComponent {
+    constructor() { super(); }
+
     mount(app: express.Application): boolean {
         app.use(errorHandler);
         return true;
     }
 }
 
-function errorHandler(err: Error, req: Request, res: Response, next: NextFunction) {
+export function errorHandler(err: Error, req: Request, res: Response, next: NextFunction) {
   // Log the error for debugging
   console.error('Error:', err.message);
   console.error('Stack:', err.stack);

@@ -9,10 +9,13 @@ import yaml from 'js-yaml';
 import { z } from 'zod';
 import { logger } from '../utils/logger';
 
-// Constants
-const KEYSTORE_FILE = path.join(process.cwd(), 'kms-local.keystore');
-const SECRETS_FILE = path.join(process.cwd(), 'config',
+// Default file locations, resolved against the consumer's cwd. These are only a
+// fallback: callers (presets, embedders, tests) should pass explicit paths to
+// `initialize()` so the KMS never assumes the working-directory layout.
+const defaultKeystorePath = (): string => path.join(process.cwd(), 'kms-local.keystore');
+const defaultSecretsPath = (): string => path.join(process.cwd(), 'config',
     process.env.NODE_ENV === 'production' ? 'production.secrets.yaml' : 'template.secrets.yaml');
+
 const ALGORITHM = 'aes-256-gcm';
 const KEY_LENGTH = 32; // 256 bits
 const IV_LENGTH = 16; // 128 bits for GCM
@@ -42,19 +45,36 @@ interface EncryptedData {
     ciphertext: Buffer;
 }
 
+/** Options for {@link LocalKMS.initialize}. Paths default to the cwd-based fallbacks. */
+export interface KmsInitOptions {
+    /** Path to the master-key keystore file. */
+    keystorePath?: string;
+    /** Path to the secrets YAML file to load/encrypt. */
+    secretsPath?: string;
+}
+
 class LocalKMS {
     private masterKey: Buffer | null = null;
     private secrets: Map<string, string> = new Map();
     private initialized: boolean = false;
+    private keystorePath: string = defaultKeystorePath();
+    private secretsPath: string = defaultSecretsPath();
+
+    /** Use the exported {@link localKMS} singleton; the class is exported for tests. */
+    constructor() {}
 
     /**
-     * Initialize the KMS service - must be called before using getSecret()
+     * Initialize the KMS service - must be called before using getSecret().
+     * @param opts Explicit keystore/secrets paths; omit to use the cwd-based fallbacks.
      */
-    async initialize(): Promise<void> {
+    async initialize(opts: KmsInitOptions = {}): Promise<void> {
         if (this.initialized) {
             logger.debug('LocalKMS already initialized');
             return;
         }
+
+        this.keystorePath = opts.keystorePath ?? defaultKeystorePath();
+        this.secretsPath = opts.secretsPath ?? defaultSecretsPath();
 
         logger.info('Initializing LocalKMS service');
 
@@ -102,9 +122,9 @@ class LocalKMS {
      * Load master key from keystore file, or generate a new one if it doesn't exist
      */
     private async loadOrGenerateMasterKey(): Promise<Buffer> {
-        if (fs.existsSync(KEYSTORE_FILE)) {
-            logger.debug('Loading master key from keystore', { path: KEYSTORE_FILE });
-            const keyData = fs.readFileSync(KEYSTORE_FILE, 'utf8').trim();
+        if (fs.existsSync(this.keystorePath)) {
+            logger.debug('Loading master key from keystore', { path: this.keystorePath });
+            const keyData = fs.readFileSync(this.keystorePath, 'utf8').trim();
             const key = Buffer.from(keyData, 'base64');
 
             if (key.length !== KEY_LENGTH) {
@@ -115,11 +135,11 @@ class LocalKMS {
         }
 
         // Generate new master key
-        logger.warn('No keystore found, generating new master key', { path: KEYSTORE_FILE });
+        logger.warn('No keystore found, generating new master key', { path: this.keystorePath });
         const newKey = crypto.randomBytes(KEY_LENGTH);
 
         // Save to keystore file with restricted permissions
-        fs.writeFileSync(KEYSTORE_FILE, newKey.toString('base64'), { mode: 0o600 });
+        fs.writeFileSync(this.keystorePath, newKey.toString('base64'), { mode: 0o600 });
         logger.info('Master key generated and saved to keystore');
 
         return newKey;
@@ -129,13 +149,13 @@ class LocalKMS {
      * Load secrets from YAML file, encrypt any plaintext values, and store decrypted values in memory
      */
     private async loadAndProcessSecrets(): Promise<void> {
-        if (!fs.existsSync(SECRETS_FILE)) {
-            logger.warn('Secrets file not found', { path: SECRETS_FILE });
+        if (!fs.existsSync(this.secretsPath)) {
+            logger.warn('Secrets file not found', { path: this.secretsPath });
             return;
         }
 
-        logger.debug('Loading secrets file', { path: SECRETS_FILE });
-        const fileContent = fs.readFileSync(SECRETS_FILE, 'utf8');
+        logger.debug('Loading secrets file', { path: this.secretsPath });
+        const fileContent = fs.readFileSync(this.secretsPath, 'utf8');
         const rawConfig = yaml.load(fileContent);
 
         const config = SecretsConfigSchema.parse(rawConfig);
@@ -180,7 +200,7 @@ class LocalKMS {
                 quotingType: '"',
                 forceQuotes: true,
             });
-            fs.writeFileSync(SECRETS_FILE, updatedYaml, 'utf8');
+            fs.writeFileSync(this.secretsPath, updatedYaml, 'utf8');
             logger.info('Secrets file updated with encrypted values');
         }
     }

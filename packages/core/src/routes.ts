@@ -1,15 +1,14 @@
 import { Application } from 'express';
-// import authRoutes from './routes/auth.routes';
-// import userRoutes from './routes/user.routes';
+import type {AppConfig} from './app';
 import healthRoutes from './routes/health.routes';
 import {setupOidcRoutes} from "./routes/auth.routes";
 
-export async function setupRoutes(app: Application) {
+export async function setupRoutes(app: Application, config: AppConfig) {
   // Health check (no auth required)
   app.use('/health', healthRoutes);
 
   // OAuth2/OIDC endpoints
-  await setupOidcRoutes(app)
+  await setupOidcRoutes(app, config.providers)
 
   app.get('/', (req, res) => {
     res.json({

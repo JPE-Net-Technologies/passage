@@ -1,5 +1,6 @@
 // tests/test-utils.ts
-import {createApp} from '../app';
+import {createApp, type AppConfig} from '../app';
+import {SecurityConfigSchema} from '../utils/schemas/config.schemas';
 import type {Express} from 'express';
 import request, {Test} from 'supertest';
 
@@ -9,25 +10,31 @@ export interface TestContext {
     testData: Map<string, any>;
 }
 
+/**
+ * Build a minimal, valid {@link AppConfig} for tests. Security settings fall back to
+ * schema defaults; providers default to none (no upstream federation / network calls).
+ * Pass overrides to exercise provider-specific routes.
+ */
+export function buildTestConfig(overrides: Partial<AppConfig> = {}): AppConfig {
+    return {
+        security: SecurityConfigSchema.parse({cors: {}, rateLimit: {}, headers: {hsts: {}}}),
+        providers: {providers: []},
+        ...overrides,
+    };
+}
+
 export class TestEnvironment {
     private contexts: Map<string, TestContext> = new Map();
 
     /**
      * Creates and initializes a new test context with the specified name.
      *
-     * @param {string} [name='default'] - The name of the context to create.
-     * Defaults to 'default' if not specified.
-     * @return {Promise<TestContext>} A promise that resolves to the created TestContext object.
+     * @param name The name of the context to create. Defaults to 'default'.
+     * @param config Optional AppConfig override (defaults to {@link buildTestConfig}).
+     * @return A promise that resolves to the created TestContext object.
      */
-    async createContext(name: string = 'default'): Promise<TestContext> {
-        // const app = createApp({
-        //   env: 'test',
-        //   // Add any test-specific overrides
-        //   // database: {
-        //   //   url: process.env.TEST_DATABASE_URL || 'memory://test'
-        //   // }
-        // });
-        const app = createApp();
+    async createContext(name: string = 'default', config: AppConfig = buildTestConfig()): Promise<TestContext> {
+        const app = await createApp(config);
 
         const context: TestContext = {
             app,

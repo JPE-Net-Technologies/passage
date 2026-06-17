@@ -1,6 +1,5 @@
 import {Application} from "express";
-import {providersConfig} from "../server"
-import {ProviderEntryType} from "../utils/schemas/config.schemas";
+import {ProviderEntryType, ProvidersConfigType} from "../utils/schemas/config.schemas";
 import {upstreamOidc} from "../services/upstream/oidc-client.service";
 import {logger} from "../utils/logger";
 
@@ -44,8 +43,15 @@ function attachOidcProvider(app: Application, provider: ProviderEntryType) {
  * Sets up routes for all providers scoped in the configuration.
  * @param app Express application
  */
-export async function setupOidcRoutes(app: Application) {
+export async function setupOidcRoutes(app: Application, providersConfig: ProvidersConfigType) {
   const oidcProviders = providersConfig.providers.filter(p => p.auth_protocol === 'oidc');
+
+  // Nothing to federate — skip upstream initialization entirely. This keeps core usable
+  // with no providers configured (and means the KMS need not be initialized).
+  if (oidcProviders.length === 0) {
+    logger.debug('No OIDC providers configured; skipping OIDC route setup');
+    return;
+  }
 
   // Initialize upstream OIDC factory (fetches discovery docs)
   await upstreamOidc.initialize(oidcProviders);

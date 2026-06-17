@@ -16,6 +16,9 @@ class UpstreamOidcFactory {
   private configs: Map<string, client.Configuration> = new Map();
   private initialized = false;
 
+  /** Use the exported {@link upstreamOidc} singleton; the class is exported for tests. */
+  constructor() {}
+
   /**
    * Initialize upstream OIDC clients for all configured providers.
    * Fetches discovery documents and caches configurations.

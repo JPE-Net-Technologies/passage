@@ -1,16 +1,18 @@
 {
-  "name": "passage-v1",
+  "name": "passage",
   "version": "1.0.0",
-  "description": "",
-  "main": "dist/index.js",
+  "description": "Composable, config-driven OAuth2/OIDC identity broker — distributed as @passage/core plus runnable presets.",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "examples/*"
+  ],
   "scripts": {
-    "build": "tsc",
+    "build": "bun run --filter '@passage/core' build",
     "test": "cross-env ENABLE_TEST_LOGS=true bun test",
     "test:watch": "bun test --watch",
-    "test:coverage": "bun test --coverage",
-    "teardown-services": "docker-compose down",
-    "express": "bun run src/server.ts",
-    "express-dev": "cross-env NODE_ENV=development bun run src/server.ts",
+    "test:coverage": "cross-env ENABLE_TEST_LOGS=true bun test --coverage",
+    "preset:dev": "cross-env NODE_ENV=development bun run --cwd examples/keycloak-basic dev",
     "docs:start": "docusaurus start",
     "docs:build": "docusaurus build",
     "docs:serve": "docusaurus serve",
@@ -23,27 +25,8 @@
     "@docusaurus/theme-mermaid": "^3.9.2",
     "@docusaurus/types": "^3.9.2",
     "@types/bun": "^1.2.19",
-    "@types/cors": "^2.8.19",
-    "@types/express": "^5.0.3",
-    "@types/js-yaml": "^4.0.9",
     "@types/node": "^24.1.0",
-    "@types/supertest": "^6.0.2",
-    "compression": "^1.8.1",
-    "cors": "^2.8.5",
     "cross-env": "^10.1.0",
-    "file-system": "^2.2.2",
-    "js-yaml": "^4.1.1",
-    "path": "^0.12.7",
-    "supertest": "^6.3.4",
-    "typescript": "^5.5.3",
-    "zod": "^4.1.5"
-  },
-  "dependencies": {
-    "@types/compression": "^1.8.1",
-    "express": "^5.1.0",
-    "helmet": "^8.1.0",
-    "oidc-provider": "^9.5.2",
-    "openid-client": "^6.8.2"
-  },
-  "private": true
+    "typescript": "^5.5.3"
+  }
 }

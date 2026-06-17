@@ -34,25 +34,30 @@ tasks:
 
   test:coverage:
     cmds:
-      - bun run test-coverage
+      - bun run test:coverage
 
   test:watch:
     cmds:
-      - bun run test-watch
+      - bun run test:watch
 
+  # Run the example deployment preset (federates the local Keycloak upstream).
   server:
+    dir: examples/keycloak-basic
     cmds:
-      - bun run express
+      - bun run start
 
   server:dev:
+    dir: examples/keycloak-basic
     cmds:
-      - bun run express-dev
+      - bun run dev
 
   launch:
+    dir: examples/keycloak-basic
     cmds:
       - docker-compose up -d
 
   teardown:
+    dir: examples/keycloak-basic
     cmds:
       - docker-compose down
 
