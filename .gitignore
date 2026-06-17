@@ -25,3 +25,7 @@ build/
 
 # Local KMS
 kms-local.keystore
+
+# Stryker mutation testing
+.stryker-tmp/
+reports/

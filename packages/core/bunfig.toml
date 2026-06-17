@@ -1,0 +1,7 @@
+# Package-local test config. Used when `bun test` runs with this directory as cwd
+# (focused dev runs and Stryker mutation runs). Coverage is intentionally OFF here: the
+# authoritative 100% coverage gate lives in the repo-root bunfig.toml and runs via
+# `bun run test`. During mutation testing the gate must be off, otherwise a mutant that
+# reduces coverage would fail the gate and be falsely scored as "killed".
+[test]
+coverage = false
