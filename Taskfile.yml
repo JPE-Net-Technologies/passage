@@ -61,25 +61,20 @@ tasks:
     cmds:
       - docker-compose down
 
-  docs:start:
-    desc: "Start Docusaurus development server"
+  docs:dev:
+    desc: "Start the Next.js + Fumadocs docs dev server"
     cmds:
-      - bun run docs:start
+      - bun run docs:dev
 
   docs:build:
-    desc: "Build Docusaurus static site"
+    desc: "Build the docs site (regenerates the TypeDoc API reference first)"
     cmds:
       - bun run docs:build
 
-  docs:serve:
-    desc: "Serve built Docusaurus site locally"
+  docs:api:
+    desc: "Regenerate the @passage/core API reference (TypeDoc)"
     cmds:
-      - bun run docs:serve
-
-  docs:clear:
-    desc: "Clear Docusaurus cache"
-    cmds:
-      - bun run docs:clear
+      - bun run docs:api
 
   # Future dev tool
 #  dx-import-idea:
