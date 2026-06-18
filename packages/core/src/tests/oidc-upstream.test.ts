@@ -8,23 +8,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import request from 'supertest';
+import {openidClientMock, FAKE_METADATA} from './openid-client.mock';
 
-const FAKE_METADATA = {
-  issuer: 'http://localhost:8080/realms/mock',
-  authorization_endpoint: 'http://localhost:8080/realms/mock/auth',
-  token_endpoint: 'http://localhost:8080/realms/mock/token',
-};
-
-// Discovery resolves normally, except for the issuer used to simulate a failing upstream.
-mock.module('openid-client', () => ({
-  discovery: async (url: URL, clientId: string) => {
-    if (url.toString().includes('broken')) {
-      throw new Error('simulated discovery failure');
-    }
-    return {serverMetadata: () => FAKE_METADATA, clientId};
-  },
-  allowInsecureRequests: Symbol('allowInsecureRequests'),
-}));
+// Shared complete mock; discovery throws for a "broken" issuer to simulate failure.
+mock.module('openid-client', openidClientMock);
 
 const {UpstreamOidcFactory, upstreamOidc} = await import('../services/upstream/oidc-client.service');
 const {localKMS} = await import('../services/kms-local');

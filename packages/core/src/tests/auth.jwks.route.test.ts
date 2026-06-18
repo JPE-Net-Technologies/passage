@@ -8,13 +8,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import request from 'supertest';
+import {openidClientMock} from './openid-client.mock';
 
-const FAKE_METADATA = {issuer: 'http://localhost:8080/realms/mock'};
-
-mock.module('openid-client', () => ({
-  discovery: async (_url: URL, clientId: string) => ({serverMetadata: () => FAKE_METADATA, clientId}),
-  allowInsecureRequests: Symbol('allowInsecureRequests'),
-}));
+mock.module('openid-client', openidClientMock);
 
 const {localKMS} = await import('../services/kms-local');
 const {upstreamOidc} = await import('../services/upstream/oidc-client.service');

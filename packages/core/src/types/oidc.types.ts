@@ -95,6 +95,10 @@ export interface AuthorizationSession {
     code_challenge_method?: CodeChallengeMethod;
     response_type: ResponseType;
     upstream_provider: string;
+    /** Upstream-leg nonce sent to the upstream provider (distinct from the downstream `nonce`). */
+    upstream_nonce?: string;
+    /** Upstream-leg PKCE verifier for the broker→upstream code exchange. */
+    upstream_code_verifier?: string;
     created_at: number;
     expires_at: number;
 }

@@ -1,8 +1,20 @@
-import {Application} from "express";
+import {Application, Response} from "express";
 import {ProviderEntryType, ProvidersConfigType} from "../utils/schemas/config.schemas";
 import {upstreamOidc} from "../services/upstream/oidc-client.service";
 import {jwksService} from "../services/oidc/jwks.service";
+import {sessionService} from "../services/oidc/session.service";
+import {federationService, FederationError} from "../services/oidc/federation.service";
+import {AuthorizationRequestSchema} from "../utils/schemas/oidc.schemas";
 import {logger} from "../utils/logger";
+
+/** Map an OAuth error code to an HTTP status (server_error ⇒ 500, client errors ⇒ 400). */
+const statusFor = (code: string): number => (code === 'server_error' ? 500 : 400);
+
+/** Send an OAuth error response; a FederationError carries its own code, anything else is a server_error. */
+function sendFederationError(res: Response, error: unknown): void {
+  const code = error instanceof FederationError ? error.code : 'server_error';
+  res.status(statusFor(code)).json({error: code});
+}
 
 
 /**
@@ -32,7 +44,35 @@ function attachOidcProvider(app: Application, provider: ProviderEntryType) {
     res.json(jwksService.getPublicJWKS());
   });
 
-  // TODO Authorization Endpoint
+  // Authorization Endpoint - begin federated login (redirect to the upstream provider)
+  app.get(`${basePath}/authorize`, async (req, res) => {
+    const parsed = AuthorizationRequestSchema.safeParse(req.query);
+    if (!parsed.success) {
+      res.status(400).json({error: 'invalid_request', error_description: parsed.error.issues[0].message});
+      return;
+    }
+    try {
+      const {redirectUrl} = await federationService.beginAuthorization({provider, request: parsed.data});
+      res.redirect(redirectUrl);
+    } catch (error) {
+      sendFederationError(res, error);
+    }
+  });
+
+  // Callback Endpoint - upstream returns here; mint a Passage code and redirect to the downstream client
+  app.get(`${basePath}/callback`, async (req, res) => {
+    // TODO(open-redirect, Phase 3): the downstream client_id/redirect_uri are NOT validated against a
+    // client registry yet. We only redirect to session.redirect_uri captured at /authorize. Phase 3 must
+    // validate client_id + redirect_uri against registered clients before trusting them.
+    const currentUrl = new URL(`${req.protocol}://${req.get('host')}${req.originalUrl}`);
+    try {
+      const {redirectUrl} = await federationService.completeCallback({provider, currentUrl});
+      res.redirect(redirectUrl);
+    } catch (error) {
+      sendFederationError(res, error);
+    }
+  });
+
   // TODO Token Endpoint
   // TODO UserInfo Endpoint
   // TODO OPT. Introspection Endpoint
@@ -65,6 +105,10 @@ export async function setupOidcRoutes(app: Application, providersConfig: Provide
 
   // Initialize Passage's own signing keys (served at each provider's /jwks).
   await jwksService.initialize();
+
+  // Initialize the authorization-session store + the federation flow service.
+  sessionService.initialize();
+  federationService.initialize();
 
   // Build routes for each OIDC provider
   for (const provider of oidcProviders) {

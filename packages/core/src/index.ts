@@ -34,6 +34,15 @@ export type {
 } from './services/oidc/token.service';
 export {sessionService, SessionService} from './services/oidc/session.service';
 export type {SessionServiceOptions} from './services/oidc/session.service';
+export {federationService, FederationService, FederationError} from './services/oidc/federation.service';
+export type {
+  FederationServiceOptions,
+  BeginAuthorizationParams,
+  CompleteCallbackParams,
+  OidcClientFns,
+  UpstreamConfigProvider,
+  SessionStore,
+} from './services/oidc/federation.service';
 
 // Configuration schemas + inferred types
 export {
