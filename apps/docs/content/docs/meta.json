@@ -1,3 +1,10 @@
 {
-  "pages": ["index", "configuration", "federation", "api"]
+  "pages": [
+    "index",
+    "---Guides---",
+    "configuration",
+    "federation",
+    "---Reference---",
+    "api"
+  ]
 }
