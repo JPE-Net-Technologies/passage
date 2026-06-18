@@ -15,6 +15,10 @@ export const ProviderEntrySchema = z.object({
     // Supported OAuth2/OIDC flows
     supported_auth_flows: z.array(z.string()),
 
+    // Passage's own issuer URL for this provider authority (the `iss` of tokens
+    // Passage mints, and the `issuer` advertised in this provider's discovery).
+    issuer: z.string().url().optional(),
+
     // Upstream provider configuration (for federation)
     upstream_issuer: z.string().url().optional(),
     upstream_client_id: z.string().optional(),

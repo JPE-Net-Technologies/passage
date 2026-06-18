@@ -21,6 +21,20 @@ export {localKMS, LocalKMS, SecretsConfigSchema, SecretEntrySchema} from './serv
 export type {KmsInitOptions, SecretEntry, SecretsConfig} from './services/kms-local';
 export {upstreamOidc, UpstreamOidcFactory, client} from './services/upstream/oidc-client.service';
 
+// OIDC foundation services (signing keys, token issuance, authorization state)
+export {jwksService, JwksService} from './services/oidc/jwks.service';
+export type {JwksInitOptions, SigningKey, KeyPairGenerator, KidComputer} from './services/oidc/jwks.service';
+export {tokenService, TokenService} from './services/oidc/token.service';
+export type {
+  TokenServiceInitOptions,
+  AccessTokenInput,
+  IdTokenInput,
+  VerifyOptions,
+  SigningKeyProvider,
+} from './services/oidc/token.service';
+export {sessionService, SessionService} from './services/oidc/session.service';
+export type {SessionServiceOptions} from './services/oidc/session.service';
+
 // Configuration schemas + inferred types
 export {
   ProviderEntrySchema,

@@ -1,6 +1,7 @@
 import {Application} from "express";
 import {ProviderEntryType, ProvidersConfigType} from "../utils/schemas/config.schemas";
 import {upstreamOidc} from "../services/upstream/oidc-client.service";
+import {jwksService} from "../services/oidc/jwks.service";
 import {logger} from "../utils/logger";
 
 
@@ -25,10 +26,15 @@ function attachOidcProvider(app: Application, provider: ProviderEntryType) {
     }
   });
 
+  // JWKS Endpoint - Passage's own public signing keys (for verifying issued tokens)
+  app.get(`${basePath}/jwks`, (req, res) => {
+    res.set('Cache-Control', 'public, max-age=3600');
+    res.json(jwksService.getPublicJWKS());
+  });
+
   // TODO Authorization Endpoint
   // TODO Token Endpoint
   // TODO UserInfo Endpoint
-  // TODO JWKS Endpoint
   // TODO OPT. Introspection Endpoint
   // TODO OPT. Revocation Endpoint
   // TODO OPT. End Session Endpoint
@@ -56,6 +62,9 @@ export async function setupOidcRoutes(app: Application, providersConfig: Provide
   // Initialize upstream OIDC factory (fetches discovery docs)
   await upstreamOidc.initialize(oidcProviders);
   logger.debug(`Initialized upstream OIDC factory for ${oidcProviders.length} providers`);
+
+  // Initialize Passage's own signing keys (served at each provider's /jwks).
+  await jwksService.initialize();
 
   // Build routes for each OIDC provider
   for (const provider of oidcProviders) {
