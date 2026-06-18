@@ -1,0 +1,29 @@
+---
+title: Passage
+description: A composable, config-driven OAuth2/OIDC identity broker — and the backbone of a secure-by-default web development practice.
+---
+
+**Passage** is a self-hosted identity broker. It federates authentication to upstream OIDC
+providers (Keycloak, Auth0, Okta, Azure AD) and issues its own Passage-signed tokens to your
+downstream clients — so you own your auth instead of renting it or wrestling Keycloak's 500 knobs.
+
+It ships as the installable **`@passage/core`** package plus runnable presets. Inject your config,
+mount the app, and add `@passage/*` capabilities as you need them.
+
+## The Three C's
+
+Passage is built around three principles:
+
+<Cards>
+  <Card title="Correctness" description="Security is the product. The core holds 100% line coverage and 100% Stryker mutation-kill gates, and conforms to the OAuth2/OIDC security specs." />
+  <Card title="Customization" description="Declarative YAML config and injectable seams give deep flexibility — integrate trusted partners instead of rebuilding." />
+  <Card title="Cognitive-Overhead-Awareness" description="Secure-by-default, so you only have to think when you deliberately choose to flex. Low cognitive load is a feature." />
+</Cards>
+
+## Start here
+
+<Cards>
+  <Card title="Configuration" href="/docs/configuration" description="The YAML config system, providers, and security settings." />
+  <Card title="Identity Federation Manual" href="/docs/federation/manual" description="The canonical reference for OAuth2/OIDC, SAML, and cross-protocol brokering." />
+  <Card title="API Reference" href="/docs/api" description="Generated from the @passage/core public API." />
+</Cards>

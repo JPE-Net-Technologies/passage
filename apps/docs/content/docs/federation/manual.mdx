@@ -1,0 +1,382 @@
+---
+title: Identity Federation Manual
+description: The canonical cross-protocol reference for OAuth2/OIDC, SAML 2.0, OpenID Federation, WS-Federation, and SCIM — and how Passage bridges them.
+---
+
+*A living reference for identity federation across protocol families. Maintained alongside **Passage**, a self-hosted identity broker (OIDC RP to upstream IdPs; OAuth2/OIDC OP to downstream clients). Scope is deliberately broader than Passage: this manual is the canonical place to look up how OAuth2/OIDC, SAML 2.0, OpenID Federation, WS-Federation, SCIM, and the supporting mechanisms work, how they differ, and how to bridge them.*
+
+> **Companion document:** `OAuth2-OIDC-Identity-Broker-Federation-Correctness.md` is the per-requirement correctness checklist, gaps list, and threat→mitigation table specific to the Passage broker. This manual is the conceptual + cross-protocol reference; that document is the implementation conformance gate. Keep them in sync.
+
+---
+
+## How to use this manual
+
+- **Picking a protocol for a new integration?** → §3 Protocol Selection Guide.
+- **Implementing or reviewing an OAuth2/OIDC flow?** → §4, and the Passage correctness doc.
+- **Integrating a legacy enterprise IdP (ADFS, Shibboleth, older Okta/Ping)?** → §5 SAML, §7 WS-Federation.
+- **Bridging SAML to OIDC (or vice versa)?** → §10 Cross-Protocol Brokering — this is Passage's core job.
+- **Provisioning/deprovisioning users, not just authenticating them?** → §9 SCIM.
+- **Hardening keys, sessions, transport, logout?** → §11 Cross-Cutting Security.
+- **Need a one-screen comparison or a term definition?** → §12 Comparison Matrix, §13 Glossary.
+
+Normative keywords (MUST/SHOULD/MAY) are used as defined in RFC 2119/8174 and reflect the cited specification's own language.
+
+---
+
+## 1. The federation mental model
+
+**Federation** = delegating authentication (and sometimes authorization and provisioning) across organizational or trust boundaries, so a user authenticated by one party (the **identity provider**) is accepted by another (the **relying party / service provider**) without the RP holding the user's credentials.
+
+Three actors recur in every protocol, under different names:
+
+| Concept | OAuth2/OIDC | SAML 2.0 | WS-Federation |
+|---|---|---|---|
+| Issues identity | OpenID Provider (OP) / Authorization Server (AS) | Identity Provider (IdP) | Identity Provider / STS |
+| Consumes identity | Relying Party (RP) / Client | Service Provider (SP) | Resource / Relying Party |
+| The credential | ID Token (JWT) + access token | Assertion (signed XML) | Security token (often SAML assertion) |
+| The user | End-User / Resource Owner | Subject / Principal | Subject |
+
+**The broker pattern (Passage):** a single component is an RP/SP to one or more upstream IdPs *and* an OP/IdP to downstream clients. It terminates the upstream identity, validates it, and **re-mints** its own credential for downstream. The seam where one identity is exchanged for another is the highest-risk part of any broker — never forward an upstream token downstream; re-issue.
+
+**Two axes worth separating in your head:**
+- **Authentication vs. authorization.** OIDC and SAML authenticate (prove who the user is). OAuth2 by itself authorizes (grants access to resources) and is *not* an authentication protocol — using bare OAuth2 access tokens as proof of login is a classic mistake.
+- **Authentication vs. provisioning.** Federated login (OIDC/SAML) tells you *who just showed up*. It does not create, update, or disable accounts ahead of time — that is **provisioning**, handled by SCIM (§9). Many "SSO is broken" incidents are actually provisioning gaps (a deactivated employee still has a live downstream account).
+
+---
+
+## 2. Trust establishment models
+
+How parties come to trust each other's keys and metadata is itself a design decision:
+
+1. **Bilateral / out-of-band (most common).** Each RP↔IdP pair is configured manually: exchange metadata URLs, client IDs/secrets, certificates. Simple, but O(n²) to manage across many parties. This is standard OIDC and standard SAML.
+2. **Dynamic client registration.** OIDC clients self-register at runtime (RFC 7591 / OIDC Dynamic Client Registration). Reduces manual config but needs strong registration-time controls.
+3. **Multilateral federation.** A common **trust anchor** signs **entity statements**, letting parties that have never met establish trust through a chain. This is **OpenID Federation 1.0** (§6) and, historically, SAML metadata aggregates (e.g., eduGAIN/InCommon). Essential at scale (research/education, government, open banking).
+
+---
+
+## 3. Protocol selection guide
+
+| If you need… | Use | Notes |
+|---|---|---|
+| New web/SPA/mobile login, modern stack | **OIDC** (Auth Code + PKCE) | Default choice in 2026. JSON/JWT, mobile-friendly. |
+| API authorization / delegated access | **OAuth 2.0** | Pair with OIDC for the login half. |
+| Integrate a legacy enterprise IdP (ADFS, Shibboleth, older SaaS) | **SAML 2.0** | Still dominant in enterprise B2B and edu/gov SSO. |
+| Trust many parties without pairwise config | **OpenID Federation 1.0** | Multilateral; trust-anchor-signed entity statements. |
+| Microsoft/legacy WS-* environment | **WS-Federation** | Legacy; prefer OIDC/SAML for new work. |
+| Create/update/disable accounts across systems | **SCIM 2.0** | Provisioning, not authentication. Complements SSO. |
+| Phishing-resistant primary authentication | **WebAuthn/passkeys (FIDO2)** | A login *method*, surfaced through OIDC/SAML. |
+| High-value / financial-grade API security | **FAPI 2.0** profile over OIDC | Adds PAR, sender-constrained tokens, etc. |
+| Input/constrained devices, TVs, CLIs | **OAuth Device Authorization Grant** (RFC 8628) | "Enter this code on your phone." |
+| Exchange one token for another (impersonation/delegation) | **OAuth Token Exchange** (RFC 8693) | Core broker/STS primitive. |
+
+**Rule of thumb:** new development → OIDC. Enterprise interop where the other side dictates terms → SAML. Brokers (like Passage) frequently need *both* and translate between them (§10).
+
+---
+
+# PART I — OAuth 2.0 & OpenID Connect
+
+## 4. OAuth 2.0 / OIDC reference
+
+### 4.1 What each layer does
+- **OAuth 2.0** (RFC 6749) — delegated *authorization*. Issues access tokens so a client can call resource servers on a user's behalf. Says nothing about *who* the user is.
+- **OIDC** (OpenID Connect Core 1.0) — an *authentication* layer on top of OAuth 2.0. Adds the **ID Token** (a signed JWT asserting the authentication event) and the UserInfo endpoint.
+- **OAuth 2.1** (draft) — consolidation that bakes in current best practice: PKCE mandatory, Implicit and ROPC grants removed, exact redirect-URI matching. Not yet an RFC; treat RFC 9700 as the controlling BCP.
+
+### 4.2 Roles
+Resource Owner (user), Client (RP), Authorization Server (issues tokens), Resource Server (hosts the API), and in OIDC the OpenID Provider (the AS + identity layer). A broker is simultaneously **Client** (upstream) and **Authorization Server / OP** (downstream).
+
+### 4.3 The grant that matters: Authorization Code + PKCE
+Every other grant is either deprecated or special-purpose. The canonical flow:
+
+1. Client redirects user to `/authorize` with `response_type=code`, `client_id`, exact `redirect_uri`, `scope` (incl. `openid` for OIDC), `state`, `nonce`, `code_challenge`, `code_challenge_method=S256`.
+2. User authenticates at the AS; AS redirects back to `redirect_uri` with `code` and `state` (and `iss` per RFC 9207).
+3. Client POSTs `code` + `code_verifier` to `/token`; receives `access_token`, `id_token` (OIDC), optional `refresh_token`.
+4. Client validates the ID Token (§4.6), uses the access token against resource servers.
+
+**Deprecated/avoid:** Implicit (`response_type=token`/`id_token token`) and Resource Owner Password Credentials (ROPC) — both removed in OAuth 2.1 and disallowed by RFC 9700 §2.1.2/§2.4.
+
+### 4.4 PKCE on both legs (RFC 7636, RFC 9700 §2.1.1)
+- Authorization servers **MUST** support PKCE. If a `code_challenge` is present, the AS **MUST** verify `code_verifier` at the token endpoint.
+- Applies to **all** clients including confidential web apps — not just public/mobile clients (RFC 9700 §2.1.1).
+- Use **S256** only; `plain` exposes the verifier. The AS **MUST** mitigate PKCE downgrade (reject a `code_verifier` at /token when no `code_challenge` was sent).
+- **Broker implication:** Passage uses PKCE as an RP toward every upstream, *and* enforces PKCE as an OP for downstream clients.
+
+### 4.5 CSRF, state, nonce
+- `state`: one-time, unguessable, bound to the user-agent session; protects the redirect against CSRF (RFC 6749 §10.12).
+- `nonce`: sent in the auth request, echoed in the ID Token; binds the token to the session and defends against replay/injection (OIDC Core §15.5.2). RP **MUST** verify the returned `nonce` equals the sent value.
+- Entropy: guessing probability **MUST** be ≤ 2⁻¹²⁸, **SHOULD** be ≤ 2⁻¹⁶⁰ (RFC 6749 §10.10).
+
+### 4.6 ID Token validation checklist (OIDC Core §3.1.3.7)
+When Passage acts as RP, every upstream ID Token gets all of this:
+1. `iss` **exactly** matches the upstream issuer.
+2. `aud` contains Passage's upstream `client_id`; reject untrusted extra audiences.
+3. `azp` validated when present / when `aud` is multi-valued.
+4. Signature verified via JWS using the issuer's `jwks_uri` keys.
+5. **Algorithm pinned to an allow-list** (e.g., `["RS256"]`); reject `alg:none` (OIDC Core §2) and any unexpected alg — this is the algorithm-confusion defense (RFC 8725). In **jose v6**, always pass explicit `algorithms` to `jwtVerify`.
+6. `exp` in the future; `iat`/`nbf` within an allowed clock-skew window.
+7. `nonce` matches.
+8. `at_hash` validated if present (optional in code flow, OIDC Core §3.1.3.8).
+
+### 4.7 Token issuance at the seam (downstream)
+- **Re-mint, don't forward.** Issue a Passage-signed ID/access token with `iss`=Passage, `aud`=downstream `client_id`. Never pass the upstream token, upstream signature, or raw upstream `sub` downstream.
+- **Subject identifiers:** prefer a broker-controlled or **pairwise pseudonymous** `sub` (OIDC Core §8) so downstream clients cannot correlate users across services.
+- **Claim minimization:** pass only needed claims; profile/email claims belong at UserInfo, not stuffed into every ID Token (OIDC Core §5.4).
+- **Access-token format:** opaque (introspected) or JWT. If JWT, follow RFC 9068 — `typ: at+jwt`, required claims, distinct `aud` per resource.
+
+### 4.8 Authorization code, refresh tokens
+- **Code:** single-use; on reuse the AS **MUST** deny and **SHOULD** revoke all tokens issued from it; ≤10-min lifetime RECOMMENDED; bind to `client_id`/`redirect_uri`/`code_challenge` (RFC 6749 §4.1.2).
+- **Refresh tokens:** for public clients **MUST** be sender-constrained or rotated (RFC 9700 §2.2.2); implement reuse detection with whole-family revocation (RFC 9700 §4.14.2).
+
+### 4.9 redirect_uri & client registry
+- Exact string match against pre-registered URIs (RFC 9700 §2.1, §4.1.3) — pattern matching is deprecated and has been exploited in the wild.
+- If `redirect_uri`/`client_id` is invalid, **do not redirect** — respond directly to the user agent (OIDC Core §3.1.2.6).
+- A broker without a downstream client registry cannot do any of this — a critical gap (see Passage correctness doc).
+
+### 4.10 Discovery & keys
+- Publish `/.well-known/openid-configuration` with all REQUIRED OIDC Discovery §3 fields (`issuer`, `authorization_endpoint`, `jwks_uri`, `response_types_supported`, `subject_types_supported`, `id_token_signing_alg_values_supported` incl. RS256; `token_endpoint` effectively required).
+- Persist signing keys; support overlapping `kid`s during rotation (publish-before-sign, retain old key for a retirement window) — OIDC Core §10.1.1. **Ephemeral keys break verification across restarts/instances.**
+
+### 4.11 OAuth2/OIDC threat → mitigation (condensed)
+
+| Threat | Mitigation | Cite |
+|---|---|---|
+| IdP mix-up (multiple upstreams) | Validate RFC 9207 `iss` response param; distinct per-IdP redirect URIs | RFC 9207; RFC 9700 §4.4 |
+| Code injection/replay | PKCE/S256 + nonce + single-use code | RFC 7636; RFC 9700 §4.5/§4.8 |
+| Token substitution / audience confusion | Strict `aud` validation; distinct `aud` per resource; `at+jwt` | OIDC Core §3.1.3.7, §16.11; RFC 9068 |
+| Algorithm confusion / `alg:none` | Pin algorithm allow-list; never derive alg from header | OIDC Core §2; RFC 8725 |
+| Credential leak via 302/307 | Use 303; never 307 (re-POSTs body); `Referrer-Policy: no-referrer` | OIDC Core §16.22 |
+| Open redirect | Exact redirect_uri match; no open redirectors | RFC 9700 §4.1.3/§4.11 |
+| Refresh-token theft | Rotation + reuse detection, or sender-constraining | RFC 9700 §2.2.2 |
+| Stolen access-token replay | Sender-constrain via mTLS/DPoP; short TTL | RFC 9700 §2.2.1 |
+
+*(Full version with all rows lives in the Passage correctness doc.)*
+
+### 4.12 FAPI 2.0 (high-assurance stretch target)
+For financial-grade / high-value data, the **FAPI 2.0 Security Profile** layers on top of OIDC: mandatory **PAR** (RFC 9126), **sender-constrained tokens** via DPoP (RFC 9449) or mTLS (RFC 8705), confidential clients only, strong client auth (`private_key_jwt`/mTLS), exact redirect matching, PKCE required. Adopt deliberately, not by default.
+
+---
+
+# PART II — SAML 2.0
+
+## 5. SAML 2.0 reference
+
+SAML 2.0 (OASIS, 2005) is XML-based, mature, and still dominant in enterprise B2B and education/government SSO. A broker integrating with corporate IdPs will meet it constantly.
+
+### 5.1 Core building blocks (saml-core-2.0-os)
+- **Assertion** — the signed XML statement about a subject. Contains:
+  - **Subject** with a `<NameID>` and `<SubjectConfirmation>` (typically `bearer`).
+  - **Conditions** — `NotBefore`/`NotOnOrAfter` validity window and **`<AudienceRestriction>`** naming the intended SP.
+  - **AuthnStatement** — when/how the user authenticated (`AuthnContextClassRef`, e.g., password, MFA).
+  - **AttributeStatement** — user attributes (email, groups, roles).
+- **NameID formats:** `persistent` (stable pseudonym per SP — the SAML analogue of pairwise `sub`), `transient` (per-session, anonymous), `emailAddress`, `unspecified`. **Prefer `persistent` or `transient`**; avoid leaking real identifiers.
+
+### 5.2 Protocols & bindings (saml-bindings-2.0-os)
+SAML separates *messages* (protocols) from *transport* (bindings):
+- **HTTP-Redirect binding** — message deflated + URL-encoded in the query string (used for AuthnRequests; signature is a separate query param).
+- **HTTP-POST binding** — message base64-encoded in an auto-submitting HTML form (used for Responses carrying assertions). The signature is **inside** the signed XML.
+- **HTTP-Artifact binding** — a small reference ("artifact") passed via the browser; the SP dereferences it over a back-channel SOAP call (ArtifactResolve). Keeps the assertion off the front channel.
+
+### 5.3 Web Browser SSO Profile (saml-profiles-2.0-os)
+The dominant flow:
+1. **SP-initiated:** SP sends an `<AuthnRequest>` (HTTP-Redirect) to the IdP's SSO endpoint.
+2. IdP authenticates the user, builds a signed `<Response>` containing the assertion.
+3. IdP returns it via **HTTP-POST** to the SP's **Assertion Consumer Service (ACS)** URL.
+4. SP validates and establishes a local session.
+
+**IdP-initiated SSO** (IdP posts an unsolicited assertion to the SP with no prior AuthnRequest) is convenient but **dangerous** — no `InResponseTo` to bind the response to a request, which enables a class of CSRF/login-CSRF and assertion-replay issues. Disable it unless explicitly required.
+
+### 5.4 Metadata (saml-metadata-2.0-os)
+Trust is bootstrapped via metadata XML exchanged between parties: `<EntityDescriptor>` with entityID, endpoints (SSO, ACS, SLO), and **signing/encryption certificates**. Multilateral SAML federations (InCommon, eduGAIN) publish signed aggregate metadata — the historical predecessor to OpenID Federation.
+
+### 5.5 SAML validation checklist (the security-critical part)
+A correct SP/broker-as-SP **MUST**:
+1. **Verify the XML signature** over the Response and/or Assertion against the IdP's registered certificate — and verify *what* is signed covers the data you consume.
+2. **Validate `<AudienceRestriction>`** names your SP entityID (the SAML `aud` check).
+3. **Enforce `NotBefore`/`NotOnOrAfter`** with bounded clock skew.
+4. **Enforce one-time use** of the assertion ID (`AssertionID` replay cache) within its validity window.
+5. **Verify `InResponseTo`** matches an AuthnRequest your SP actually issued (binds response to request; rejects unsolicited/replayed responses).
+6. **Verify `Recipient`/`Destination`** equals your ACS URL.
+7. **Pin allowed signature algorithms**; reject weak/none.
+8. **Decrypt `<EncryptedAssertion>`** with your private key when assertion encryption is used.
+
+### 5.6 XML Signature Wrapping (XSW) — the signature SAML attack
+SAML's worst-class vulnerability. Because XML signatures protect a referenced element by ID, an attacker can restructure the document so the *signed* element is moved/hidden while an *injected, attacker-controlled* element is what the application actually reads — passing signature verification while serving forged data. Documented comprehensively in Somorovsky et al., *"On Breaking SAML: Be Whoever You Want to Be"* (USENIX Security 2012), which broke 11 of 14 frameworks tested.
+
+**Mitigations:**
+- Use a vetted, current SAML library; **do not** hand-roll XML signature verification.
+- Verify the signature and then **read data only from the verified element** (resolve by the signed reference, not by re-querying the DOM).
+- Reject documents with multiple assertions / unexpected structure; process exactly one assertion.
+- Apply schema validation and disable dangerous XML features (see §5.7).
+
+### 5.7 Other SAML-specific risks
+- **XXE / XML parser attacks:** disable external entity resolution and DTDs in the XML parser.
+- **Signature exclusion / "unsigned assertion accepted":** reject any response/assertion that is not signed as required; never make signing optional in config.
+- **Comment-injection NameID bugs (2018):** parser differences around XML comments let `user@example.com<!---->.evil.com` be read as `user@example.com` — canonicalize/normalize text nodes; patch libraries.
+- **Clock skew & long validity windows:** keep assertion lifetimes short; cache assertion IDs for replay prevention across the whole window.
+
+### 5.8 SAML vs OIDC at a glance
+| Dimension | SAML 2.0 | OIDC |
+|---|---|---|
+| Encoding | XML | JSON / JWT |
+| Signature | XML-DSig (XSW-prone) | JWS (simpler, but watch alg confusion) |
+| Transport | Redirect/POST/Artifact via browser | HTTP redirects + JSON endpoints |
+| Mobile/SPA fit | Poor | Excellent |
+| Discovery | Metadata XML | `/.well-known/openid-configuration` |
+| Pairwise subject | `persistent` NameID | pairwise `sub` |
+| Logout | SLO (front/back-channel, brittle) | RP-Initiated / Front / Back-Channel |
+| Maturity / enterprise reach | Very high | High and growing |
+
+---
+
+# PART III — Multilateral & legacy federation
+
+## 6. OpenID Federation 1.0
+
+**Status:** Approved as an OpenID **Final Specification** in early 2026 (60-day review Dec 2025–Feb 2026; final vote passed 85–0). Protocol-independent core (**OpenID Federation 1.0/1.1**) plus an OIDC/OAuth-specific binding (**OpenID Federation for OpenID Connect**).
+
+**Problem it solves:** bilateral trust is O(n²). In large ecosystems (research/education, government, open finance) parties that have never met must trust each other.
+
+**How it works:**
+- Each entity publishes a signed **Entity Configuration** (a JWT at `/.well-known/openid-federation`) describing its metadata and keys.
+- **Intermediates** and a **Trust Anchor** issue **Subordinate Statements** about entities below them.
+- A relying party builds a **Trust Chain** from a peer up to a Trust Anchor it already trusts; if the chain validates, trust is established **dynamically, without prior pairwise configuration**.
+- Supports **metadata policy** (the trust anchor/intermediate can constrain or override subordinates' metadata) and automatic key rotation through the chain.
+
+**When to reach for it:** you are joining or operating a federation with many participants and a governance authority. Overkill for a handful of bilateral integrations. Relevant to Passage only if it must participate in such an ecosystem upstream.
+
+## 7. WS-Federation (legacy)
+
+Part of the WS-* / WS-Trust stack, historically tied to Microsoft ADFS and older .NET. A **Security Token Service (STS)** issues tokens (often SAML assertions) carried via WS-Trust. Browser SSO uses the WS-Federation Passive Requestor Profile (`wa=wsignin1.0`, `wtrealm`, `wreply`, `wresult`).
+
+**Guidance:** legacy only. Many ADFS deployments now also speak SAML or OIDC — prefer those. Support WS-Federation only when an upstream forces it, and isolate it behind the broker so downstream clients never see WS-*.
+
+---
+
+# PART IV — Provisioning & supporting mechanisms
+
+## 8. (reserved — see §9)
+
+## 9. SCIM 2.0 — provisioning, not authentication
+
+Federated login answers "who is at the door right now." It does **not** create accounts ahead of time, sync attribute/role changes, or *disable* a user when they leave. That gap is the cause of many "ghost account" security incidents. **SCIM** (System for Cross-domain Identity Management) fills it.
+
+- **RFC 7642** — definitions/requirements; **RFC 7643** — core schema (`User`, `Group`, `EnterpriseUser`); **RFC 7644** — protocol (REST/JSON CRUD + PATCH + bulk + filtered search).
+- IdP/HR system (the **SCIM client**) pushes lifecycle events to the downstream **SCIM service provider**: create on hire, update on role change, **deactivate on offboarding**.
+- **Why it matters for a broker:** SSO + SCIM together give *just-in-time access and timely revocation*. SSO alone leaves stale downstream accounts. If Passage's downstream clients hold their own user records, consider a SCIM endpoint so deprovisioning propagates.
+
+## 10. Cross-protocol brokering (Passage's core job)
+
+A broker frequently has a SAML or WS-Fed IdP upstream and OIDC clients downstream (or any mix). The translation rules:
+
+- **Terminate and re-mint.** Validate the upstream credential fully (SAML §5.5 *or* OIDC §4.6), then issue a fresh Passage-signed downstream credential. **Never** relay the upstream assertion/token, its signature, or its raw subject identifier.
+- **Map subjects deliberately.** Upstream `NameID`/`sub` → broker-controlled or pairwise downstream `sub`. Maintain the mapping in durable storage so the same upstream user maps stably downstream.
+- **Map and minimize claims.** Translate SAML attributes ↔ OIDC claims explicitly via an allow-list; do not blindly forward the entire attribute statement.
+- **Reconcile validation models.** SAML `AudienceRestriction`/`NotOnOrAfter`/`InResponseTo` and OIDC `aud`/`exp`/`nonce` are analogous — enforce *both* sides' full checklist; the seam must not relax either.
+- **Reconcile logout.** SAML SLO and OIDC logout differ in shape and reliability; map them as best-effort and propagate in both directions (§11.4). Logout is the leakiest part of brokering.
+- **Mix-up across heterogeneous upstreams.** With multiple upstream IdPs (some SAML, some OIDC), use distinct per-IdP callback endpoints and the OIDC RFC 9207 `iss` parameter where available, so a response can never be attributed to the wrong upstream.
+
+## 11. Other notable mechanisms
+
+These appear repeatedly in real deployments and are worth knowing even when not central:
+
+| Mechanism | Spec | What it's for |
+|---|---|---|
+| **mTLS-bound tokens** | RFC 8705 | Sender-constrain tokens to a client TLS cert; FAPI-grade. |
+| **DPoP** | RFC 9449 | Application-layer sender-constraining (proof-of-possession) without mTLS infra. |
+| **PAR** (Pushed Authorization Requests) | RFC 9126 | Client pushes the auth request to the AS back-channel first; integrity-protects parameters; FAPI 2.0 mandatory. |
+| **JAR** (JWT-Secured Auth Request) | RFC 9101 | Signs/encrypts the authorization request as a JWT. |
+| **Token Exchange** | RFC 8693 | Trade one token for another (impersonation/delegation) — the STS/broker primitive. |
+| **Device Authorization Grant** | RFC 8628 | Login on input-constrained devices (TVs, CLIs) via a secondary device. |
+| **JWT Bearer / Client Assertion** | RFC 7523 | Use a signed JWT as a client credential or grant (e.g., `private_key_jwt`). |
+| **Token Introspection** | RFC 7662 | Resource server asks the AS whether an opaque token is active. |
+| **Token Revocation** | RFC 7009 | Client/AS revoke a token explicitly. |
+| **WebAuthn / FIDO2 / passkeys** | W3C WebAuthn, FIDO2 CTAP | Phishing-resistant *authentication method*, surfaced through OIDC/SAML as the authn step (`acr`/`AuthnContextClassRef`). Not a federation protocol itself. |
+| **Kerberos / LDAP** | RFC 4120 / RFC 4511 | Intra-domain enterprise authn/directory; usually upstream of, and bridged into, federation via the IdP. |
+
+**WebAuthn/passkeys note:** these strengthen the *primary* login (resistant to phishing and replay) but do not replace OIDC/SAML — the IdP performs WebAuthn, then federates the result. A broker consumes the federated result and may reflect the authentication strength downstream via `acr`/`amr`.
+
+---
+
+# PART V — Cross-cutting concerns & reference
+
+## 11. Cross-cutting security (applies to all protocols)
+
+### 11.1 Keys & signatures
+- Persist signing keys; rotate with overlapping key identifiers (`kid` in JWKS / multiple certs in SAML metadata) — publish new before signing with it, retire old after a window.
+- Pin algorithms to an allow-list on every verification path. Reject `none` (JWT) and weak/excluded algorithms (XML-DSig). This is the single highest-leverage defense against forgery.
+- Verify signatures against the *issuer's* keys only; never trust key material embedded in the token/assertion itself.
+
+### 11.2 Transport & redirects
+- TLS everywhere; HSTS on browser-facing endpoints.
+- Use HTTP **303** for post-authentication redirects; never **307** (re-POSTs the body, leaking credentials). `Referrer-Policy: no-referrer` on pages carrying codes/assertions.
+
+### 11.3 Sessions & replay
+- Regenerate session IDs after authentication (anti-fixation).
+- Replay caches: single-use authorization codes and one-time assertion IDs, both enforced *across all instances* — an in-memory store cannot guarantee this in a multi-instance or restart scenario.
+- Bound all validity windows tightly; enforce clock skew explicitly.
+
+### 11.4 Logout (hard in every protocol)
+- **OIDC:** RP-Initiated Logout (`id_token_hint`, registered `post_logout_redirect_uri`), Front-Channel and Back-Channel Logout (signed Logout Token to each RP's `backchannel_logout_uri`).
+- **SAML:** Single Logout (SLO) via front- or back-channel — notoriously brittle, especially front-channel across many SPs.
+- **Broker duty:** propagate logout *upstream* (call the upstream `end_session_endpoint`/SLO) and *downstream* (notify each downstream client). Treat as best-effort and design downstream sessions with short lifetimes so logout gaps self-heal.
+
+### 11.5 Storage & availability
+- A distributed/durable store (Redis/Postgres) is required for correctness, not just scale: shared single-use enforcement, shared replay caches, key continuity, and survival across restarts/deploys. In-memory state is acceptable only for a single-instance dev deployment.
+
+## 12. Comparison matrix
+
+| | OAuth 2.0 | OIDC | SAML 2.0 | OpenID Federation | WS-Fed | SCIM |
+|---|---|---|---|---|---|---|
+| Purpose | Authorization | Authentication | Authentication | Trust establishment | Authentication | Provisioning |
+| Era / status | 2012, current | Current default | 2005, mature | Final 2026 | Legacy | Current |
+| Format | JSON | JWT | XML | Signed JWT chains | XML/SOAP | JSON/REST |
+| Trust model | Bilateral | Bilateral / dynamic | Bilateral / aggregate metadata | Multilateral | Bilateral | Bilateral |
+| Mobile/SPA | Good | Excellent | Poor | n/a | Poor | n/a |
+| Signature pitfall | — | alg confusion / none | XSW / XXE | chain validation | XML-DSig | — |
+| Subject privacy | — | pairwise `sub` | `persistent`/`transient` NameID | inherits OIDC | NameID | — |
+| Use in Passage | Downstream authz | Both legs | Upstream (enterprise) | Optional upstream | Legacy upstream | Optional downstream |
+
+## 13. Glossary
+
+- **AS / Authorization Server** — issues OAuth tokens.
+- **OP / OpenID Provider** — AS + OIDC identity layer.
+- **RP / Relying Party** — consumes an IdP's identity (OIDC client; SAML SP).
+- **SP / Service Provider** — SAML term for RP.
+- **IdP** — issues identity (SAML/WS-Fed/OIDC).
+- **Assertion** — signed XML identity statement (SAML).
+- **ID Token** — signed JWT asserting authentication (OIDC).
+- **Access token** — credential to call an API (OAuth).
+- **PKCE** — proof-key binding of an auth request to its token exchange (RFC 7636).
+- **PAR / DPoP / mTLS** — request integrity / sender-constraining mechanisms.
+- **JWKS** — JSON Web Key Set published at `jwks_uri`.
+- **NameID** — SAML subject identifier (persistent/transient/email/...).
+- **ACS** — SAML Assertion Consumer Service (the SP's response endpoint).
+- **SLO** — SAML Single Logout.
+- **Trust Anchor** — root signer in a multilateral federation.
+- **Seam** — the broker translation point where one identity is exchanged for a freshly minted one.
+- **XSW** — XML Signature Wrapping attack.
+- **Mix-up** — attack confusing which AS/IdP issued a response.
+- **SCIM** — cross-domain user provisioning (RFC 7643/7644).
+
+## 14. References
+
+**OAuth / OIDC**
+- RFC 6749 (OAuth 2.0), RFC 6750 (Bearer Tokens), RFC 7636 (PKCE), RFC 7519 (JWT), RFC 7662 (Introspection), RFC 7009 (Revocation), RFC 7591 (Dynamic Client Registration), RFC 7523 (JWT Bearer), RFC 8414 (AS Metadata), RFC 8628 (Device Grant), RFC 8693 (Token Exchange), RFC 8705 (mTLS), RFC 8725 (JWT BCP), RFC 9068 (JWT Access Tokens), RFC 9101 (JAR), RFC 9126 (PAR), RFC 9207 (Issuer Identification), RFC 9449 (DPoP), **RFC 9700 (OAuth 2.0 Security BCP / BCP 240, Jan 2025)**.
+- OpenID Connect Core 1.0; Discovery 1.0; RP-Initiated Logout 1.0; Front-Channel Logout 1.0; Back-Channel Logout 1.0; OpenID Federation 1.0 (Final, 2026); FAPI 2.0 Security Profile.
+- OAuth 2.1 (draft-ietf-oauth-v2-1) — consolidation in progress.
+
+**SAML**
+- OASIS SAML 2.0: `saml-core-2.0-os`, `saml-bindings-2.0-os`, `saml-profiles-2.0-os`, `saml-metadata-2.0-os` (2005).
+- Somorovsky et al., *On Breaking SAML: Be Whoever You Want to Be*, USENIX Security 2012 (XSW).
+
+**Provisioning / enterprise**
+- RFC 7642 / 7643 / 7644 (SCIM 2.0); RFC 4120 (Kerberos); RFC 4511 (LDAP).
+
+**Notes**
+- Where RFC 9700 strengthens a base-spec SHOULD into a MUST (PKCE support/enforcement, exact redirect-URI matching), this manual follows RFC 9700.
+- SAML 2.0 references are stable OASIS standards (2005); the XSW guidance reflects the 2012 analysis and subsequent library hardening.
+- OpenID Federation reached Final Specification status in early 2026; consult the published final document for section-level citations before relying on specific clauses.
+
+---
+
+*Living document — extend per-protocol sections as integrations are added. Keep normative claims tied to a cited section; flag anything inferred from vendor docs rather than a spec.*

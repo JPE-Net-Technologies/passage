@@ -1,0 +1,11 @@
+{
+  "//": "Used only by TypeDoc to read @passage/core's public API types. Extends the core",
+  "//2": "tsconfig but silences the node10 moduleResolution deprecation that TypeDoc's newer",
+  "//3": "bundled TypeScript treats as an error. Does not affect the core build.",
+  "extends": "../../packages/core/tsconfig.json",
+  "compilerOptions": {
+    "ignoreDeprecations": "6.0"
+  },
+  "include": ["../../packages/core/src/**/*.ts"],
+  "exclude": ["../../packages/core/src/tests/**"]
+}

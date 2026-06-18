@@ -29,3 +29,7 @@ kms-local.keystore
 # Stryker mutation testing
 .stryker-tmp/
 reports/
+
+# Design kit (kept local; the logo passage.png IS tracked)
+Design-Kit.zip
+Design-Kit/

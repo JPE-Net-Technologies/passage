@@ -14,17 +14,12 @@
     "test:coverage": "cross-env ENABLE_TEST_LOGS=true bun test --coverage",
     "test:mutation": "stryker run",
     "preset:dev": "cross-env NODE_ENV=development bun run --cwd examples/keycloak-basic dev",
-    "docs:start": "docusaurus start",
-    "docs:build": "docusaurus build",
-    "docs:serve": "docusaurus serve",
-    "docs:clear": "docusaurus clear"
+    "docs:dev": "bun run --cwd apps/docs dev",
+    "docs:build": "bun run --cwd apps/docs build",
+    "docs:start": "bun run --cwd apps/docs start",
+    "docs:api": "bun run --cwd apps/docs gen:api"
   },
   "devDependencies": {
-    "@docusaurus/core": "^3.9.2",
-    "@docusaurus/module-type-aliases": "^3.9.2",
-    "@docusaurus/preset-classic": "^3.9.2",
-    "@docusaurus/theme-mermaid": "^3.9.2",
-    "@docusaurus/types": "^3.9.2",
     "@stryker-mutator/core": "^9.6.1",
     "@types/bun": "^1.2.19",
     "@types/node": "^24.1.0",
