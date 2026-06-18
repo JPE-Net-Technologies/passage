@@ -8,12 +8,12 @@ environment-aware: `template.*.yaml` in development, `production.*.yaml` in prod
 
 ## Config structure
 
-```mermaid
-graph TD;
+<Mermaid
+  chart={`graph TD;
     security.yaml --> config.ts
-    config.yaml --> config.ts
     providers.yaml --> config.ts
-```
+    secrets.yaml --> config.ts`}
+/>
 
 ## Providers
 

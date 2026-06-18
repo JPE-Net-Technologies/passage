@@ -10,6 +10,21 @@ downstream clients — so you own your auth instead of renting it or wrestling K
 It ships as the installable **`@passage/core`** package plus runnable presets. Inject your config,
 mount the app, and add `@passage/*` capabilities as you need them.
 
+## Install
+
+```package-install
+@passage/core
+```
+
+Types are first-class — hover any token below to see what it infers:
+
+```ts twoslash
+// Token lifetimes are plain numbers (seconds); the broker's issuer is its own URL.
+const accessTokenLifetime = 3600;
+//    ^?
+const config = { issuer: 'https://id.example.com', accessTokenLifetime } as const;
+```
+
 ## The Three C's
 
 Passage is built around three principles:
