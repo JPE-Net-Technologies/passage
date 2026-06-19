@@ -17,6 +17,7 @@ const {upstreamOidc} = await import('../services/upstream/oidc-client.service');
 const {jwksService} = await import('../services/oidc/jwks.service');
 const {sessionService} = await import('../services/oidc/session.service');
 const {federationService} = await import('../services/oidc/federation.service');
+const {clientRegistry} = await import('../services/oidc/client-registry.service');
 const {createApp} = await import('../app');
 const {buildTestConfig} = await import('./test-utils');
 
@@ -44,6 +45,7 @@ beforeAll(async () => {
   upstreamOidc.reset();
   jwksService.reset();
   sessionService.reset();
+  clientRegistry.reset();    // route setup re-initializes it from the clients config below
   federationService.reset(); // route setup is responsible for (re)initializing it
   app = await createApp(buildTestConfig({
     providers: {
@@ -56,6 +58,10 @@ beforeAll(async () => {
         oidcProvider({name: 'oidc-unreg', endpoint_url: 'oidc-unreg'}, {issuer: 'http://localhost:3000/oidc-unreg', upstream_issuer: undefined}) as any,
       ],
     },
+    clients: {clients: [
+      {client_id: 'c', client_type: 'public', redirect_uris: ['https://app.test/cb']},
+      {client_id: 'downstream', client_type: 'public', redirect_uris: ['https://app.test/cb']},
+    ]},
   }));
 });
 
@@ -85,6 +91,24 @@ describe('GET /:provider/authorize', () => {
       .query({response_type: 'code', client_id: 'c', redirect_uri: 'https://app.test/cb'})
       .expect(400);
     expect(res.body.error).toBe('invalid_request');
+  });
+
+  it('400s an unregistered client without redirecting', async () => {
+    const res = await request(app)
+      .get('/oidc-x/authorize')
+      .query({response_type: 'code', client_id: 'unknown', redirect_uri: 'https://app.test/cb', scope: 'openid', state: 'dstate'})
+      .expect(400);
+    expect(res.body.error).toBe('invalid_request');
+    expect(res.headers.location).toBeUndefined(); // direct error, never a redirect
+  });
+
+  it('400s a redirect_uri not registered for the client', async () => {
+    const res = await request(app)
+      .get('/oidc-x/authorize')
+      .query({response_type: 'code', client_id: 'c', redirect_uri: 'https://evil.test/cb', scope: 'openid', state: 'dstate'})
+      .expect(400);
+    expect(res.body.error).toBe('invalid_request');
+    expect(res.headers.location).toBeUndefined();
   });
 
   it('500s when the provider has no issuer configured (FederationError server_error)', async () => {

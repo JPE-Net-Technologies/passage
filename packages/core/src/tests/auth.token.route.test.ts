@@ -22,6 +22,7 @@ const {federationService} = await import('../services/oidc/federation.service');
 const {tokenService} = await import('../services/oidc/token.service');
 const {grantService} = await import('../services/oidc/grant.service');
 const {userInfoService} = await import('../services/oidc/userinfo.service');
+const {clientRegistry} = await import('../services/oidc/client-registry.service');
 const {createApp} = await import('../app');
 const {buildTestConfig} = await import('./test-utils');
 
@@ -56,8 +57,12 @@ beforeAll(async () => {
   federationService.reset();
   tokenService.reset();
   userInfoService.reset();
+  clientRegistry.reset();
   grantService.reset();
-  app = await createApp(buildTestConfig({providers: {providers: [oidcProvider() as any]}}));
+  app = await createApp(buildTestConfig({
+    providers: {providers: [oidcProvider() as any]},
+    clients: {clients: [{client_id: 'downstream', client_type: 'public', redirect_uris: ['https://app.test/cb']}]},
+  }));
 });
 
 /** Drive /authorize then /callback (with a PKCE challenge) to obtain a redeemable Passage code. */

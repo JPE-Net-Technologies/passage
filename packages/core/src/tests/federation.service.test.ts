@@ -110,6 +110,10 @@ const makeService = (over: Record<string, any> = {}) => {
         return {...input, code: 'code-1', created_at: 0, expires_at: 0, consumed: false};
       },
     },
+    // Default registry stub: the authRequest() default client+redirect are registered.
+    clients: over.clients ?? {
+      getClient: () => ({client_id: 'downstream', client_type: 'public', redirect_uris: ['https://app.test/cb']}),
+    },
   });
   return {service, captured};
 };
@@ -166,6 +170,26 @@ describe('FederationService — beginAuthorization', () => {
       upstream_code_verifier: 'ver-1',
     });
     expect(redirectUrl).toBe('https://up.test/auth?x=1');
+  });
+
+  it('rejects an unregistered client (direct error, no session created)', async () => {
+    const {service, captured} = makeService({clients: {getClient: () => undefined}});
+    await expectFederationError(
+      service.beginAuthorization({provider: provider(), request: authRequest()}),
+      'invalid_request', 'unknown client',
+    );
+    expect(captured.createSessionInput).toBeUndefined(); // never reached session creation
+  });
+
+  it('rejects a redirect_uri not registered for the client', async () => {
+    const {service, captured} = makeService({
+      clients: {getClient: () => ({client_id: 'downstream', client_type: 'public', redirect_uris: ['https://other.test/cb']})},
+    });
+    await expectFederationError(
+      service.beginAuthorization({provider: provider(), request: authRequest()}),
+      'invalid_request', 'redirect_uri not registered',
+    );
+    expect(captured.createSessionInput).toBeUndefined();
   });
 
   it('defaults the upstream scope to "openid" when none configured', async () => {
@@ -318,6 +342,7 @@ describe('FederationService — lifecycle', () => {
         getSession: () => undefined,
         createCode: (input: any) => ({...input, code: 'c', created_at: 0, expires_at: 0, consumed: false}),
       },
+      clients: {getClient: () => ({client_id: 'downstream', client_type: 'public', redirect_uris: ['https://app.test/cb']})},
     });
     const s = new FederationService();
     s.initialize(baseOpts('first'));

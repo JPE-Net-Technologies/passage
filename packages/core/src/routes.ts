@@ -8,7 +8,7 @@ export async function setupRoutes(app: Application, config: AppConfig) {
   app.use('/health', healthRoutes);
 
   // OAuth2/OIDC endpoints
-  await setupOidcRoutes(app, config.providers)
+  await setupOidcRoutes(app, config.providers, config.clients)
 
   app.get('/', (req, res) => {
     res.json({

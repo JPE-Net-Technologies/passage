@@ -11,6 +11,8 @@ import {
   ProvidersConfigType,
   SecurityConfigSchema,
   SecurityConfigType,
+  ClientsConfig,
+  ClientsConfigType,
 } from './utils/schemas/config.schemas';
 import {ENV} from './utils/config';
 import {logger} from './utils/logger';
@@ -30,7 +32,7 @@ function readYaml(filePath: string): unknown {
 }
 
 /** Resolve the absolute path of a config file within `configDir` for the current env. */
-export function configPath(configDir: string, name: 'security' | 'providers' | 'secrets'): string {
+export function configPath(configDir: string, name: 'security' | 'providers' | 'secrets' | 'clients'): string {
   return path.join(configDir, `${configFilePrefix()}.${name}.yaml`);
 }
 
@@ -42,10 +44,16 @@ export function loadProvidersConfig(configDir: string): ProvidersConfigType {
   return ProvidersConfig.parse(readYaml(configPath(configDir, 'providers')));
 }
 
+/** Load the client registry; an absent clients file yields an empty registry. */
+export function loadClientsConfig(configDir: string): ClientsConfigType {
+  return ClientsConfig.parse(readYaml(configPath(configDir, 'clients')) ?? {clients: []});
+}
+
 /** Load and validate the full `AppConfig` from a config directory. */
 export function loadAppConfig(configDir: string): AppConfig {
   return {
     security: loadSecurityConfig(configDir),
     providers: loadProvidersConfig(configDir),
+    clients: loadClientsConfig(configDir),
   };
 }

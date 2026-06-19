@@ -1,0 +1,12 @@
+# Downstream client registry — the apps Passage issues tokens to.
+# client_id + redirect_uri are validated exactly at /authorize (no open redirects).
+clients:
+  - client_id: "example-spa"
+    client_type: public
+    redirect_uris:
+      - "http://localhost:8081/callback"
+    allowed_scopes:
+      - openid
+      - profile
+      - email
+    pkce_required: true

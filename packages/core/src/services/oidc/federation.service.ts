@@ -15,7 +15,8 @@
 import * as clientNS from 'openid-client';
 import {upstreamOidc} from '../upstream/oidc-client.service';
 import {sessionService} from './session.service';
-import {ProviderEntryType} from '../../utils/schemas/config.schemas';
+import {clientRegistry} from './client-registry.service';
+import {ProviderEntryType, ClientEntryType} from '../../utils/schemas/config.schemas';
 import {AuthorizationRequestValidated} from '../../utils/schemas/oidc.schemas';
 import {
   AuthorizationSession,
@@ -51,6 +52,11 @@ export interface UpstreamConfigProvider {
   getConfig(providerName: string): clientNS.Configuration;
 }
 
+/** The slice of the client registry this service depends on. */
+export interface ClientRegistry {
+  getClient(clientId: string): ClientEntryType | undefined;
+}
+
 /** The slice of sessionService this service depends on. */
 export interface SessionStore {
   createSession(input: Omit<AuthorizationSession, 'id' | 'created_at' | 'expires_at'>): AuthorizationSession;
@@ -62,6 +68,7 @@ export interface FederationServiceOptions {
   oidc?: Partial<OidcClientFns>;      // override openid-client functions (default: live module namespace)
   upstream?: UpstreamConfigProvider;  // default: upstreamOidc singleton
   sessions?: SessionStore;            // default: sessionService singleton
+  clients?: ClientRegistry;           // default: clientRegistry singleton
 }
 
 export interface BeginAuthorizationParams {
@@ -82,6 +89,7 @@ class FederationService {
   private overrides: Partial<OidcClientFns> = {};
   private upstream: UpstreamConfigProvider = upstreamOidc;
   private sessions: SessionStore = sessionService;
+  private clients: ClientRegistry = clientRegistry;
   private initialized = false;
 
   /** Use the exported {@link federationService} singleton; the class is exported for tests. */
@@ -99,6 +107,9 @@ class FederationService {
     }
     if (opts.sessions) {
       this.sessions = opts.sessions;
+    }
+    if (opts.clients) {
+      this.clients = opts.clients;
     }
     this.initialized = true;
   }
@@ -121,6 +132,17 @@ class FederationService {
 
     if (request.response_type !== 'code') {
       throw new FederationError('unsupported_response_type', 'unsupported response_type');
+    }
+
+    // Validate the downstream client + redirect_uri against the registry BEFORE creating a session
+    // or redirecting. An unknown client or unregistered redirect_uri must NOT be redirected to
+    // (RFC 6749 §4.1.2.1) — these surface as direct error responses. (Correctness gate §C.)
+    const client = this.clients.getClient(request.client_id);
+    if (!client) {
+      throw new FederationError('invalid_request', 'unknown client');
+    }
+    if (!client.redirect_uris.includes(request.redirect_uri)) {
+      throw new FederationError('invalid_request', 'redirect_uri not registered');
     }
 
     const {issuer, scope} = this.resolveProvider(provider);

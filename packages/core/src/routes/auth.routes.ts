@@ -1,11 +1,12 @@
 import {Application, Request, Response} from "express";
-import {ProviderEntryType, ProvidersConfigType} from "../utils/schemas/config.schemas";
+import {ProviderEntryType, ProvidersConfigType, ClientsConfigType} from "../utils/schemas/config.schemas";
 import {upstreamOidc} from "../services/upstream/oidc-client.service";
 import {jwksService} from "../services/oidc/jwks.service";
 import {sessionService} from "../services/oidc/session.service";
 import {federationService, FederationError} from "../services/oidc/federation.service";
 import {tokenService} from "../services/oidc/token.service";
 import {grantService, GrantError} from "../services/oidc/grant.service";
+import {clientRegistry} from "../services/oidc/client-registry.service";
 import {userInfoService, UserInfoError, extractBearerToken} from "../services/oidc/userinfo.service";
 import {buildDiscoveryDocument} from "../services/oidc/discovery.service";
 import {AuthorizationRequestSchema, TokenRequestSchema} from "../utils/schemas/oidc.schemas";
@@ -62,11 +63,10 @@ function attachOidcProvider(app: Application, provider: ProviderEntryType) {
     }
   });
 
-  // Callback Endpoint - upstream returns here; mint a Passage code and redirect to the downstream client
+  // Callback Endpoint - upstream returns here; mint a Passage code and redirect to the downstream client.
+  // The redirect target is session.redirect_uri, which was validated against the client registry at
+  // /authorize (federationService.beginAuthorization), so it is a registered URI — no open redirect.
   app.get(`${basePath}/callback`, async (req, res) => {
-    // TODO(open-redirect, Phase 3): the downstream client_id/redirect_uri are NOT validated against a
-    // client registry yet. We only redirect to session.redirect_uri captured at /authorize. Phase 3 must
-    // validate client_id + redirect_uri against registered clients before trusting them.
     const currentUrl = new URL(`${req.protocol}://${req.get('host')}${req.originalUrl}`);
     try {
       const {redirectUrl} = await federationService.completeCallback({provider, currentUrl});
@@ -125,7 +125,7 @@ function attachOidcProvider(app: Application, provider: ProviderEntryType) {
  * Sets up routes for all providers scoped in the configuration.
  * @param app Express application
  */
-export async function setupOidcRoutes(app: Application, providersConfig: ProvidersConfigType) {
+export async function setupOidcRoutes(app: Application, providersConfig: ProvidersConfigType, clientsConfig: ClientsConfigType) {
   const oidcProviders = providersConfig.providers.filter(p => p.auth_protocol === 'oidc');
 
   // Nothing to federate — skip upstream initialization entirely. This keeps core usable
@@ -142,8 +142,10 @@ export async function setupOidcRoutes(app: Application, providersConfig: Provide
   // Initialize Passage's own signing keys (served at each provider's /jwks).
   await jwksService.initialize();
 
-  // Initialize the authorization-session store + the federation flow service.
+  // Initialize the authorization-session store, the downstream client registry (consumed by the
+  // federation flow to validate client_id/redirect_uri), and the federation flow service.
   sessionService.initialize();
+  clientRegistry.initialize(clientsConfig.clients);
   federationService.initialize();
 
   // Initialize the token issuer + the grant flow that the /token endpoint consumes, plus the

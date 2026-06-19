@@ -19,6 +19,7 @@ export function buildTestConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     return {
         security: SecurityConfigSchema.parse({cors: {}, rateLimit: {}, headers: {hsts: {}}}),
         providers: {providers: []},
+        clients: {clients: []},
         ...overrides,
     };
 }

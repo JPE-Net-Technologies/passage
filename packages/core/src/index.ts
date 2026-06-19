@@ -42,7 +42,9 @@ export type {
   OidcClientFns,
   UpstreamConfigProvider,
   SessionStore,
+  ClientRegistry,
 } from './services/oidc/federation.service';
+export {clientRegistry, ClientRegistryService} from './services/oidc/client-registry.service';
 export {buildDiscoveryDocument} from './services/oidc/discovery.service';
 export {grantService, GrantService, GrantError, defaultSubjectMapper} from './services/oidc/grant.service';
 export {userInfoService, UserInfoService, UserInfoError, extractBearerToken} from './services/oidc/userinfo.service';
@@ -64,11 +66,15 @@ export {
   ProviderEntrySchema,
   ProvidersConfig,
   SecurityConfigSchema,
+  ClientEntrySchema,
+  ClientsConfig,
 } from './utils/schemas/config.schemas';
 export type {
   ProviderEntryType,
   ProvidersConfigType,
   SecurityConfigType,
+  ClientEntryType,
+  ClientsConfigType,
 } from './utils/schemas/config.schemas';
 
 // OIDC type definitions + validation schemas

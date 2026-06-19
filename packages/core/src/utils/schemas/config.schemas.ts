@@ -41,6 +41,27 @@ export const ProvidersConfig = z.object({
 
 export type ProvidersConfigType = z.infer<typeof ProvidersConfig>;
 
+// Downstream client registry (config/clients.yaml). Clients Passage issues tokens to.
+export const ClientEntrySchema = z.object({
+  client_id: z.string().min(1),
+  client_type: z.enum(['public', 'confidential']),
+  // Exact-match redirect URIs (correctness gate §C). At least one is required.
+  redirect_uris: z.array(z.string().url()).min(1),
+  allowed_scopes: z.array(z.string()).optional(),
+  allowed_grants: z.array(z.string()).optional(),
+  client_secret_ref: z.string().optional(), // KMS secret reference (confidential clients)
+  pkce_required: z.boolean().optional(),
+  sector_identifier: z.string().optional(), // for pairwise subject identifiers
+}).loose();
+
+export type ClientEntryType = z.infer<typeof ClientEntrySchema>;
+
+export const ClientsConfig = z.object({
+  clients: z.array(ClientEntrySchema),
+}).loose();
+
+export type ClientsConfigType = z.infer<typeof ClientsConfig>;
+
 export const SecurityConfigSchema = z.object({
   cors: z.object({
     origins: z.array(z.string()).default(['http://localhost:3000']),

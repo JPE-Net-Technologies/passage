@@ -1,7 +1,7 @@
 import express from 'express';
 
 import {ENV as env} from './utils/config';
-import type {SecurityConfigType, ProvidersConfigType} from './utils/schemas/config.schemas';
+import type {SecurityConfigType, ProvidersConfigType, ClientsConfigType} from './utils/schemas/config.schemas';
 import {setupMiddleware} from './middleware';
 import {setupRoutes} from './routes';
 import {logger} from './utils/logger';
@@ -14,6 +14,7 @@ import {logger} from './utils/logger';
 export interface AppConfig {
   security: SecurityConfigType;
   providers: ProvidersConfigType;
+  clients: ClientsConfigType;
 }
 
 export async function createApp(config: AppConfig) {
