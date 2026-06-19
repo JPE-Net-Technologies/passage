@@ -4,15 +4,17 @@ import {upstreamOidc} from "../services/upstream/oidc-client.service";
 import {jwksService} from "../services/oidc/jwks.service";
 import {sessionService} from "../services/oidc/session.service";
 import {federationService, FederationError} from "../services/oidc/federation.service";
-import {AuthorizationRequestSchema} from "../utils/schemas/oidc.schemas";
+import {tokenService} from "../services/oidc/token.service";
+import {grantService, GrantError} from "../services/oidc/grant.service";
+import {AuthorizationRequestSchema, TokenRequestSchema} from "../utils/schemas/oidc.schemas";
 import {logger} from "../utils/logger";
 
 /** Map an OAuth error code to an HTTP status (server_error ⇒ 500, client errors ⇒ 400). */
 const statusFor = (code: string): number => (code === 'server_error' ? 500 : 400);
 
-/** Send an OAuth error response; a FederationError carries its own code, anything else is a server_error. */
-function sendFederationError(res: Response, error: unknown): void {
-  const code = error instanceof FederationError ? error.code : 'server_error';
+/** Send an OAuth error response; a FederationError/GrantError carries its own code, anything else is a server_error. */
+function sendOAuthError(res: Response, error: unknown): void {
+  const code = error instanceof FederationError || error instanceof GrantError ? error.code : 'server_error';
   res.status(statusFor(code)).json({error: code});
 }
 
@@ -55,7 +57,7 @@ function attachOidcProvider(app: Application, provider: ProviderEntryType) {
       const {redirectUrl} = await federationService.beginAuthorization({provider, request: parsed.data});
       res.redirect(303, redirectUrl); // 303 (not 302/307) so the next hop is a GET — correctness gate §16.22
     } catch (error) {
-      sendFederationError(res, error);
+      sendOAuthError(res, error);
     }
   });
 
@@ -69,11 +71,27 @@ function attachOidcProvider(app: Application, provider: ProviderEntryType) {
       const {redirectUrl} = await federationService.completeCallback({provider, currentUrl});
       res.redirect(303, redirectUrl); // 303 (not 302/307) so the next hop is a GET — correctness gate §16.22
     } catch (error) {
-      sendFederationError(res, error);
+      sendOAuthError(res, error);
     }
   });
 
-  // TODO Token Endpoint
+  // Token Endpoint - redeem an authorization code or rotate a refresh token into Passage-signed tokens.
+  app.post(`${basePath}/token`, async (req, res) => {
+    // TODO(client-auth, Phase 3): the client is not authenticated (no client registry). The grant binds
+    // the code to its client_id/redirect_uri but does not verify a client secret.
+    const parsed = TokenRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({error: 'invalid_request'});
+      return;
+    }
+    try {
+      const tokens = await grantService.exchange(provider, parsed.data);
+      res.set('Cache-Control', 'no-store').json(tokens); // RFC 6749 §5.1 — token responses must not be cached
+    } catch (error) {
+      sendOAuthError(res, error);
+    }
+  });
+
   // TODO UserInfo Endpoint
   // TODO OPT. Introspection Endpoint
   // TODO OPT. Revocation Endpoint
@@ -109,6 +127,10 @@ export async function setupOidcRoutes(app: Application, providersConfig: Provide
   // Initialize the authorization-session store + the federation flow service.
   sessionService.initialize();
   federationService.initialize();
+
+  // Initialize the token issuer + the grant flow that the /token endpoint consumes.
+  tokenService.initialize();
+  grantService.initialize();
 
   // Build routes for each OIDC provider
   for (const provider of oidcProviders) {
