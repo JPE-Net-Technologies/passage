@@ -127,10 +127,13 @@ class UpstreamOidcFactory {
 
     // Discover issuer metadata and create configuration
     // In development, allow HTTP (Keycloak runs on http://localhost:8080)
+    // Pin the upstream id_token signing algorithm (RP-leg algorithm-confusion defense, per the
+    // broker correctness gate §D). Passing client metadata constrains verification to RS256 rather
+    // than trusting whatever the upstream advertises. Per-provider override is a future follow-up.
     const config = await client.discovery(
       new URL(oidcConfig.upstream_issuer),
       oidcConfig.upstream_client_id,
-      clientSecret,
+      {client_secret: clientSecret, id_token_signed_response_alg: 'RS256'},
       undefined,  // client_auth_method (use default)
       isDev ? {execute: [client.allowInsecureRequests]} : undefined
     );

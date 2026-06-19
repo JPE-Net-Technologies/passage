@@ -7,7 +7,7 @@
 // authority (its own issuer + configured lifetimes). initialize() only wires the
 // deterministic seams (clock/jti/signer/verifier) and the signing-key provider.
 import {SignJWT, jwtVerify, type CryptoKey, type JWTPayload, type JWTVerifyOptions, type JWTHeaderParameters} from 'jose';
-import {AccessTokenClaims, IDTokenClaims} from '../../types/oidc.types';
+import {AccessTokenClaims, IDTokenClaims, SigningAlgorithm} from '../../types/oidc.types';
 import {jwksService} from './jwks.service';
 import type {SigningKey} from './jwks.service';
 
@@ -67,6 +67,11 @@ export interface IdTokenInput {
 
 export interface VerifyOptions {
   audience?: string | string[];
+  /**
+   * Accepted JWS `alg` allow-list (algorithm-confusion defense, per the broker correctness gate
+   * §D / RFC 8725). Default `['RS256']`. jose rejects `alg:none` regardless of this list.
+   */
+  algorithms?: SigningAlgorithm[];
 }
 
 const defaultSigner: TokenSigner = (claims, header, key) =>
@@ -160,7 +165,7 @@ class TokenService {
     const result = await this.verifier(
       token,
       (header) => this.jwks.getVerificationKey(header.kid as string),
-      {audience: opts.audience},
+      {audience: opts.audience, algorithms: opts.algorithms ?? ['RS256']},
     );
     return result.payload as AccessTokenClaims | IDTokenClaims;
   }

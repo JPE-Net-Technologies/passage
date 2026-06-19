@@ -64,7 +64,8 @@ describe('GET /:provider/authorize', () => {
     const res = await request(app)
       .get('/oidc-x/authorize')
       .query({response_type: 'code', client_id: 'c', redirect_uri: 'https://app.test/cb', scope: 'openid profile', state: 'dstate'})
-      .expect(302);
+      .expect(303);
+    expect(res.headers['referrer-policy']).toBe('no-referrer'); // helmet default — no code-carrying Referer leaks
     const loc = new URL(res.headers.location);
     expect(loc.origin + loc.pathname).toBe('https://up.test/auth');
     expect(loc.searchParams.get('redirect_uri')).toBe('http://localhost:3000/oidc-x/callback');
@@ -109,13 +110,13 @@ describe('GET /:provider/callback', () => {
     const begin = await request(app)
       .get('/oidc-x/authorize')
       .query({response_type: 'code', client_id: 'c', redirect_uri: 'https://app.test/cb', scope: 'openid', state: 'dstate'})
-      .expect(302);
+      .expect(303);
     const sessionId = new URL(begin.headers.location).searchParams.get('state')!;
 
     const res = await request(app)
       .get('/oidc-x/callback')
       .query({state: sessionId, code: 'abc'})
-      .expect(302);
+      .expect(303);
     const loc = new URL(res.headers.location);
     expect(loc.origin + loc.pathname).toBe('https://app.test/cb');
     expect(loc.searchParams.get('code')).toBeTruthy();

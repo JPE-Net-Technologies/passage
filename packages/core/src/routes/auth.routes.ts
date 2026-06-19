@@ -53,7 +53,7 @@ function attachOidcProvider(app: Application, provider: ProviderEntryType) {
     }
     try {
       const {redirectUrl} = await federationService.beginAuthorization({provider, request: parsed.data});
-      res.redirect(redirectUrl);
+      res.redirect(303, redirectUrl); // 303 (not 302/307) so the next hop is a GET — correctness gate §16.22
     } catch (error) {
       sendFederationError(res, error);
     }
@@ -67,7 +67,7 @@ function attachOidcProvider(app: Application, provider: ProviderEntryType) {
     const currentUrl = new URL(`${req.protocol}://${req.get('host')}${req.originalUrl}`);
     try {
       const {redirectUrl} = await federationService.completeCallback({provider, currentUrl});
-      res.redirect(redirectUrl);
+      res.redirect(303, redirectUrl); // 303 (not 302/307) so the next hop is a GET — correctness gate §16.22
     } catch (error) {
       sendFederationError(res, error);
     }

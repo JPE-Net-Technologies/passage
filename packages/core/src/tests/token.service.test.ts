@@ -4,7 +4,7 @@
 // and jti, so every field and the iat/exp arithmetic is deterministic. The real
 // jose signer/verifier are exercised once via a sign→verify round-trip.
 import {describe, it, expect, beforeAll} from 'bun:test';
-import {generateKeyPair, type CryptoKey} from 'jose';
+import {generateKeyPair, SignJWT, type CryptoKey} from 'jose';
 import {TokenService, type TokenSigner, type TokenVerifier, type SigningKeyProvider} from '../services/oidc/token.service';
 import {JwksService, jwksService} from '../services/oidc/jwks.service';
 
@@ -146,13 +146,15 @@ describe('TokenService — verification', () => {
     await expect(ts.verify(token)).rejects.toThrow();
   });
 
-  it('delegates to the injected verifier, passing the audience and a working key resolver', async () => {
+  it('delegates to the injected verifier, passing the audience, default algorithms, and a working key resolver', async () => {
     let calls = 0;
     let seenAudience: unknown = 'unset';
+    let seenAlgorithms: unknown = 'unset';
     let resolved: unknown;
     const verifier: TokenVerifier = async (_token, getKey, options) => {
       calls++;
       seenAudience = options.audience;
+      seenAlgorithms = options.algorithms;
       resolved = getKey({kid: 'kid-1'} as never);
       return {payload: {sub: 'stub-subject'}};
     };
@@ -162,8 +164,24 @@ describe('TokenService — verification', () => {
     const payload = await ts.verify('any.token', {audience: 'aud-x'});
     expect(calls).toBe(1);
     expect(seenAudience).toBe('aud-x');
+    expect(seenAlgorithms).toEqual(['RS256']); // default allow-list passed to the verifier
     expect(resolved).toBe(pair.publicKey); // resolver routes header.kid → JWKS public key
     expect(payload.sub).toBe('stub-subject');
+  });
+
+  it('pins the algorithm allow-list: rejects an out-of-list alg, honours an explicit override', async () => {
+    const es = await generateKeyPair('ES256');
+    const esJwks: SigningKeyProvider = {
+      getSigningKey: () => ({kid: 'es', alg: 'ES256', privateKey: es.privateKey}),
+      getVerificationKey: () => es.publicKey,
+    };
+    const ts = new TokenService();
+    ts.initialize({jwks: esJwks});
+    const token = await new SignJWT({sub: 'u1'}).setProtectedHeader({alg: 'ES256', kid: 'es'}).sign(es.privateKey);
+
+    await expect(ts.verify(token)).rejects.toThrow(); // ES256 not in the default ['RS256'] allow-list
+    const payload = await ts.verify(token, {algorithms: ['ES256']}); // explicit override is honoured
+    expect(payload.sub).toBe('u1');
   });
 });
 

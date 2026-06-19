@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import request from 'supertest';
-import {openidClientMock, FAKE_METADATA} from './openid-client.mock';
+import {openidClientMock, FAKE_METADATA, lastDiscoveryCall} from './openid-client.mock';
 
 // Shared complete mock; discovery throws for a "broken" issuer to simulate failure.
 mock.module('openid-client', openidClientMock);
@@ -80,12 +80,16 @@ describe('UpstreamOidcFactory — registration', () => {
     expect(f.getProviderNames()).toContain('oidc-full');
     expect(f.getConfig('oidc-full').serverMetadata().issuer).toBe(FAKE_METADATA.issuer);
     expect(() => f.getConfig('unknown')).toThrow('Unknown provider');
+    // discovery() is handed client metadata pinning the upstream id_token alg + the KMS secret
+    expect(lastDiscoveryCall.metadata).toEqual({client_secret: 'super-secret', id_token_signed_response_alg: 'RS256'});
   });
 
   it('registers a provider with no secret reference', async () => {
     const f = new UpstreamOidcFactory();
     await f.initialize([provider({OidcConfig: {upstream_client_secret_ref: undefined}}) as any]);
     expect(f.hasProvider('oidc-full')).toBe(true);
+    // no secret resolved → client_secret is undefined, but the alg is still pinned
+    expect(lastDiscoveryCall.metadata).toEqual({client_secret: undefined, id_token_signed_response_alg: 'RS256'});
   });
 
   it('skips (and logs) a provider missing upstream_client_id', async () => {

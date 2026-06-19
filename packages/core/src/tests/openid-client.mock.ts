@@ -22,10 +22,14 @@ export const FAKE_TOKENS = {
   claims: () => ({sub: 'u-1'}),
 };
 
+/** Captures the args of the most recent `discovery()` call, so tests can assert client-metadata pinning. */
+export const lastDiscoveryCall: {metadata?: unknown} = {};
+
 /** Factory for `mock.module('openid-client', openidClientMock)`. */
 export const openidClientMock = () => ({
   // Upstream discovery (UpstreamOidcFactory). Throws for a "broken" issuer to simulate failure.
-  discovery: async (url: URL, clientId: string) => {
+  discovery: async (url: URL, clientId: string, metadata?: unknown) => {
+    lastDiscoveryCall.metadata = metadata;
     if (url.toString().includes('broken')) {
       throw new Error('simulated discovery failure');
     }
