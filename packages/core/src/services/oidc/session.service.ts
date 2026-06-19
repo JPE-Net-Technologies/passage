@@ -40,7 +40,10 @@ const DEFAULT_REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 /** Fields the caller supplies; the service stamps id/code/token + timestamps. */
 type SessionInput = Omit<AuthorizationSession, 'id' | 'created_at' | 'expires_at'>;
 type CodeInput = Omit<AuthorizationCode, 'code' | 'created_at' | 'expires_at' | 'consumed'>;
-type RefreshInput = Omit<RefreshTokenData, 'token' | 'created_at' | 'expires_at' | 'revoked'>;
+type RefreshInput = Omit<RefreshTokenData, 'token' | 'created_at' | 'expires_at' | 'revoked' | 'family_id'> & {
+  /** Supply to add a rotated token to an existing family; omit to start a new family. */
+  family_id?: string;
+};
 
 class SessionService {
   private sessions = new Map<string, AuthorizationSession>();
@@ -167,9 +170,14 @@ class SessionService {
   storeRefreshToken(input: RefreshInput): RefreshTokenData {
     this.ensureInitialized();
     const now = this.clock();
+    // Token id is generated first; the family id is only generated when none is supplied
+    // (a rotation passes the existing family_id). Order is fixed so counter-based test ids stay stable.
+    const token = this.generateId();
+    const family_id = input.family_id ?? this.generateId();
     const entry: RefreshTokenData = {
       ...input,
-      token: this.generateId(),
+      family_id,
+      token,
       created_at: now,
       expires_at: now + this.refreshTtlMs,
       revoked: false,
@@ -203,6 +211,29 @@ class SessionService {
     }
     entry.revoked = true;
     return true;
+  }
+
+  /**
+   * Raw lookup that filters NOTHING — unlike {@link getRefreshToken} it returns revoked and
+   * expired records too. Reuse detection needs to see a revoked (rotated) token in order to
+   * revoke its whole family, so this must not hide revoked/expired entries.
+   */
+  findRefreshToken(token: string): RefreshTokenData | undefined {
+    this.ensureInitialized();
+    return this.refreshTokens.get(token);
+  }
+
+  /** Revoke every token in a family (the rotation-reuse response). Returns how many were in the family. */
+  revokeRefreshFamily(familyId: string): number {
+    this.ensureInitialized();
+    let count = 0;
+    for (const entry of this.refreshTokens.values()) {
+      if (entry.family_id === familyId) {
+        entry.revoked = true;
+        count++;
+      }
+    }
+    return count;
   }
 
   private isExpired(expiresAt: number): boolean {

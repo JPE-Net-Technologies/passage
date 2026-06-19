@@ -351,6 +351,8 @@ export interface UpstreamTokens {
  */
 export interface RefreshTokenData {
     token: string;
+    /** Groups a rotation chain, so reuse of any member can revoke the whole family. */
+    family_id: string;
     subject: string;
     client_id: string;
     scope: string;

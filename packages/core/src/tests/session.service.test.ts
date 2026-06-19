@@ -54,6 +54,8 @@ describe('SessionService — guards before init', () => {
     expect(() => s.storeRefreshToken(refreshInput())).toThrow('not initialized');
     expect(() => s.getRefreshToken('x')).toThrow('not initialized');
     expect(() => s.revokeRefreshToken('x')).toThrow('not initialized');
+    expect(() => s.findRefreshToken('x')).toThrow('not initialized');
+    expect(() => s.revokeRefreshFamily('x')).toThrow('not initialized');
   });
 });
 
@@ -83,12 +85,19 @@ describe('SessionService — stamping with default TTLs', () => {
     expect(code.subject).toBe('user-123');
   });
 
-  it('stamps a refresh token, default expiry, and revoked=false', () => {
+  it('stamps a refresh token, a generated family id, default expiry, and revoked=false', () => {
     const rt = fresh().storeRefreshToken(refreshInput());
     expect(rt.token).toBe('id-1');
+    expect(rt.family_id).toBe('id-2'); // family id generated after the token id when none supplied
     expect(rt.created_at).toBe(NOW);
     expect(rt.expires_at).toBe(NOW + REFRESH_TTL);
     expect(rt.revoked).toBe(false);
+  });
+
+  it('reuses a supplied family id without consuming a generated id for it', () => {
+    const rt = fresh().storeRefreshToken({...refreshInput(), family_id: 'fam-X'});
+    expect(rt.family_id).toBe('fam-X');
+    expect(rt.token).toBe('id-1'); // generateId ran exactly once — for the token only
   });
 });
 
@@ -179,6 +188,36 @@ describe('SessionService — refresh tokens', () => {
     const rt = s.storeRefreshToken(refreshInput());
     now = rt.expires_at;
     expect(s.getRefreshToken(rt.token)).toBeUndefined();
+  });
+
+  it('findRefreshToken returns records regardless of revoked or expired state', () => {
+    let now = 0;
+    const s = new SessionService();
+    s.initialize({clock: () => now, generateId: counterIds(), refreshTtlMs: 100});
+    const rt = s.storeRefreshToken(refreshInput());
+
+    expect(s.findRefreshToken(rt.token)).toEqual(rt); // live
+    expect(s.findRefreshToken('missing')).toBeUndefined();
+
+    s.revokeRefreshToken(rt.token);
+    expect(s.findRefreshToken(rt.token)!.revoked).toBe(true); // revoked is still surfaced (reuse detection)
+
+    now = rt.expires_at; // past expiry
+    expect(s.findRefreshToken(rt.token)).toBeDefined(); // expiry does not hide it either
+  });
+
+  it('revokeRefreshFamily revokes the whole family and leaves other families live', () => {
+    const s = new SessionService();
+    s.initialize({clock: () => 0, generateId: counterIds(), refreshTtlMs: 1e9});
+    const a1 = s.storeRefreshToken({...refreshInput(), family_id: 'famA'});
+    const a2 = s.storeRefreshToken({...refreshInput(), family_id: 'famA'});
+    const b1 = s.storeRefreshToken({...refreshInput(), family_id: 'famB'});
+
+    expect(s.revokeRefreshFamily('famA')).toBe(2); // exactly the two famA members
+    expect(s.getRefreshToken(a1.token)).toBeUndefined();
+    expect(s.getRefreshToken(a2.token)).toBeUndefined();
+    expect(s.getRefreshToken(b1.token)).toEqual(b1); // famB untouched
+    expect(s.revokeRefreshFamily('famNope')).toBe(0); // unknown family revokes nothing
   });
 });
 
