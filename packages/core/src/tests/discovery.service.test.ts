@@ -18,6 +18,7 @@ describe('buildDiscoveryDocument', () => {
       issuer: 'https://iss.test/oidc-x',
       authorization_endpoint: 'https://iss.test/oidc-x/authorize',
       token_endpoint: 'https://iss.test/oidc-x/token',
+      userinfo_endpoint: 'https://iss.test/oidc-x/userinfo',
       jwks_uri: 'https://iss.test/oidc-x/jwks',
       response_types_supported: ['code'],
       subject_types_supported: ['public'],

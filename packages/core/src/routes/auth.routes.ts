@@ -1,4 +1,4 @@
-import {Application, Response} from "express";
+import {Application, Request, Response} from "express";
 import {ProviderEntryType, ProvidersConfigType} from "../utils/schemas/config.schemas";
 import {upstreamOidc} from "../services/upstream/oidc-client.service";
 import {jwksService} from "../services/oidc/jwks.service";
@@ -6,6 +6,7 @@ import {sessionService} from "../services/oidc/session.service";
 import {federationService, FederationError} from "../services/oidc/federation.service";
 import {tokenService} from "../services/oidc/token.service";
 import {grantService, GrantError} from "../services/oidc/grant.service";
+import {userInfoService, UserInfoError, extractBearerToken} from "../services/oidc/userinfo.service";
 import {buildDiscoveryDocument} from "../services/oidc/discovery.service";
 import {AuthorizationRequestSchema, TokenRequestSchema} from "../utils/schemas/oidc.schemas";
 import {logger} from "../utils/logger";
@@ -92,7 +93,24 @@ function attachOidcProvider(app: Application, provider: ProviderEntryType) {
     }
   });
 
-  // TODO UserInfo Endpoint
+  // UserInfo Endpoint - return the authenticated user's claims for a valid Bearer access token.
+  // OIDC Core §5.3 requires both GET and POST; the access token is read from the Authorization header.
+  const userInfoHandler = async (req: Request, res: Response) => {
+    const token = extractBearerToken(req.headers.authorization);
+    if (!token) {
+      res.status(401).set('WWW-Authenticate', 'Bearer').json({error: 'invalid_request'});
+      return;
+    }
+    try {
+      res.json(await userInfoService.getUserInfo(token, provider.OidcConfig!.issuer!));
+    } catch (error) {
+      const code = (error as UserInfoError).code;
+      res.status(401).set('WWW-Authenticate', `Bearer error="${code}"`).json({error: code});
+    }
+  };
+  app.get(`${basePath}/userinfo`, userInfoHandler);
+  app.post(`${basePath}/userinfo`, userInfoHandler);
+
   // TODO OPT. Introspection Endpoint
   // TODO OPT. Revocation Endpoint
   // TODO OPT. End Session Endpoint
@@ -128,8 +146,10 @@ export async function setupOidcRoutes(app: Application, providersConfig: Provide
   sessionService.initialize();
   federationService.initialize();
 
-  // Initialize the token issuer + the grant flow that the /token endpoint consumes.
+  // Initialize the token issuer + the grant flow that the /token endpoint consumes, plus the
+  // claims store the grant flow writes to and the /userinfo endpoint reads from.
   tokenService.initialize();
+  userInfoService.initialize();
   grantService.initialize();
 
   // Build routes for each OIDC provider

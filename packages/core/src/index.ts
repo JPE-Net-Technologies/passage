@@ -45,6 +45,13 @@ export type {
 } from './services/oidc/federation.service';
 export {buildDiscoveryDocument} from './services/oidc/discovery.service';
 export {grantService, GrantService, GrantError, defaultSubjectMapper} from './services/oidc/grant.service';
+export {userInfoService, UserInfoService, UserInfoError, extractBearerToken} from './services/oidc/userinfo.service';
+export type {
+  UserInfoServiceInitOptions,
+  ClaimsWriter,
+  ClaimsStore,
+  ClaimsVerifier,
+} from './services/oidc/userinfo.service';
 export type {
   GrantServiceOptions,
   GrantSessionStore,

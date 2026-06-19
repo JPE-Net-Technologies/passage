@@ -20,6 +20,7 @@ export function buildDiscoveryDocument(provider: ProviderEntryType): OIDCDiscove
     issuer,
     authorization_endpoint: `${issuer}/authorize`,
     token_endpoint: `${issuer}/token`,
+    userinfo_endpoint: `${issuer}/userinfo`,
     jwks_uri: `${issuer}/jwks`,
     response_types_supported: ['code'],
     subject_types_supported: ['public'],

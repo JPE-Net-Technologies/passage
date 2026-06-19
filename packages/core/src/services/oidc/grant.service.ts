@@ -17,6 +17,8 @@ import {createHash, timingSafeEqual} from 'node:crypto';
 import {sessionService} from './session.service';
 import {tokenService} from './token.service';
 import type {AccessTokenInput, IdTokenInput} from './token.service';
+import {userInfoService} from './userinfo.service';
+import type {ClaimsWriter} from './userinfo.service';
 import {ProviderEntryType} from '../../utils/schemas/config.schemas';
 import {TokenRequestValidated} from '../../utils/schemas/oidc.schemas';
 import {
@@ -87,6 +89,7 @@ export interface GrantServiceOptions {
   sessions?: GrantSessionStore;  // default: sessionService singleton
   tokens?: GrantTokenIssuer;     // default: tokenService singleton
   mintSubject?: SubjectMapper;   // default: defaultSubjectMapper
+  claims?: ClaimsWriter;         // default: userInfoService singleton
 }
 
 type AuthCodeRequest = Extract<TokenRequestValidated, {grant_type: 'authorization_code'}>;
@@ -100,6 +103,7 @@ class GrantService {
   private sessions: GrantSessionStore = sessionService;
   private tokens: GrantTokenIssuer = tokenService;
   private mintSubject: SubjectMapper = defaultSubjectMapper;
+  private claims: ClaimsWriter = userInfoService;
   private initialized = false;
 
   /** Use the exported {@link grantService} singleton; the class is exported for tests. */
@@ -117,6 +121,9 @@ class GrantService {
     }
     if (opts.mintSubject) {
       this.mintSubject = opts.mintSubject;
+    }
+    if (opts.claims) {
+      this.claims = opts.claims;
     }
     this.initialized = true;
   }
@@ -170,6 +177,8 @@ class GrantService {
     // Re-mint, never forward: the downstream sub is broker-controlled, derived from the upstream sub.
     const subject = this.mintSubject(session.client_id, code.subject);
     const scope = session.scope;
+    // Remember the user's claims under the minted sub for /userinfo (re-minted, never the upstream sub).
+    this.claims.rememberClaims(subject, {...code.user_info, sub: subject});
 
     const access = await this.tokens.issueAccessToken({
       issuer, subject, client_id: session.client_id, audience: session.client_id, lifetime: accessLifetime, scope,

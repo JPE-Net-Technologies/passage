@@ -21,6 +21,7 @@ const {sessionService} = await import('../services/oidc/session.service');
 const {federationService} = await import('../services/oidc/federation.service');
 const {tokenService} = await import('../services/oidc/token.service');
 const {grantService} = await import('../services/oidc/grant.service');
+const {userInfoService} = await import('../services/oidc/userinfo.service');
 const {createApp} = await import('../app');
 const {buildTestConfig} = await import('./test-utils');
 
@@ -54,6 +55,7 @@ beforeAll(async () => {
   sessionService.reset();
   federationService.reset();
   tokenService.reset();
+  userInfoService.reset();
   grantService.reset();
   app = await createApp(buildTestConfig({providers: {providers: [oidcProvider() as any]}}));
 });

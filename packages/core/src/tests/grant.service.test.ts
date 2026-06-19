@@ -11,6 +11,7 @@ import type {GrantSessionStore, GrantTokenIssuer} from '../services/oidc/grant.s
 import {sessionService} from '../services/oidc/session.service';
 import {tokenService} from '../services/oidc/token.service';
 import {jwksService} from '../services/oidc/jwks.service';
+import {userInfoService} from '../services/oidc/userinfo.service';
 import type {AuthorizationCode, AuthorizationSession, RefreshTokenData} from '../types/oidc.types';
 import type {TokenRequestValidated} from '../utils/schemas/oidc.schemas';
 
@@ -43,7 +44,7 @@ const codeRecord = (over: Partial<AuthorizationCode> = {}): AuthorizationCode =>
   code: 'CODE',
   session_id: 'sess-1',
   subject: 'upstream-sub-1',
-  user_info: {sub: 'upstream-sub-1'},
+  user_info: {sub: 'upstream-sub-1', email: 'u@x.test', name: 'U'},
   upstream_tokens: {access_token: 'up-at', token_type: 'Bearer', refresh_token: 'up-rt'},
   created_at: 0,
   expires_at: 0,
@@ -104,8 +105,12 @@ const makeService = (over: Over = {}) => {
     issueAccessToken: async (input) => { captured.accessInput = input; return {token: 'ACCESS', claims: {} as any}; },
     issueIdToken: async (input) => { captured.idInput = input; return {token: 'ID', claims: {} as any}; },
   };
+  // Capturing claims stub so the real userInfoService singleton is never touched here.
+  const claims = {
+    rememberClaims: (subject: string, c: any) => { captured.rememberedSubject = subject; captured.rememberedClaims = c; },
+  };
   const svc = new GrantService();
-  svc.initialize({sessions, tokens, mintSubject: over.mintSubject});
+  svc.initialize({sessions, tokens, mintSubject: over.mintSubject, claims});
   return {svc, captured};
 };
 
@@ -162,6 +167,10 @@ describe('GrantService — authorization_code grant', () => {
     expect(captured.storedRefresh.scope).toBe('openid profile');
     expect(captured.storedRefresh.upstream_refresh_token).toBe('up-rt');
     expect(captured.storedRefresh.family_id).toBeUndefined(); // new family — none supplied
+    // claims remembered for /userinfo under the minted sub (upstream claims kept, upstream sub overridden)
+    expect(captured.rememberedSubject).toBe('mint:downstream:upstream-sub-1');
+    expect(captured.rememberedClaims).toEqual({email: 'u@x.test', name: 'U', sub: 'mint:downstream:upstream-sub-1'});
+    expect(captured.rememberedClaims.sub).not.toBe('upstream-sub-1');
     expect(res).toEqual({
       access_token: 'ACCESS', token_type: 'Bearer', expires_in: 3600,
       refresh_token: 'NEW-RT', id_token: 'ID', scope: 'openid profile',
@@ -304,6 +313,8 @@ describe('GrantService — unsupported grants & lifecycle', () => {
     await jwksService.initialize();
     tokenService.reset();
     tokenService.initialize();
+    userInfoService.reset();
+    userInfoService.initialize();
 
     const session = sessionService.createSession({
       client_id: 'downstream', redirect_uri: 'https://app.test/cb', scope: 'openid',
@@ -323,5 +334,9 @@ describe('GrantService — unsupported grants & lifecycle', () => {
     const claims = await tokenService.verify(res.access_token); // signed by the real token/jwks singletons
     expect(claims.sub).toBe(defaultSubjectMapper('downstream', 'upstream-sub-1')); // default mapper used
     expect(claims.sub).not.toBe('upstream-sub-1'); // never the raw upstream sub
+
+    // default claims store (userInfoService singleton) received the claims under the minted sub
+    const info = await userInfoService.getUserInfo(res.access_token, 'https://iss.test/oidc-x');
+    expect(info.sub).toBe(defaultSubjectMapper('downstream', 'upstream-sub-1'));
   });
 });
