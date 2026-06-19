@@ -1,4 +1,4 @@
 {
   "title": "Federation",
-  "pages": ["manual"]
+  "pages": ["manual", "correctness"]
 }

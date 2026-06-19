@@ -1,0 +1,179 @@
+---
+title: Broker Correctness Gate
+description: Per-requirement OAuth2/OIDC identity-broker conformance checklist, gaps list, and threat→mitigation table for Passage — the implementation gate companion to the Federation Manual.
+---
+
+*Reference document for **Passage** — a self-hosted identity broker that is simultaneously an OIDC Relying Party (RP) to upstream IdPs (Keycloak/Auth0/Okta/Azure AD) and an OAuth2/OIDC OpenID Provider (OP) to downstream clients. Stack: Express 5, TypeScript, openid-client v6, jose v6. Flow: Authorization Code + PKCE. Current shortcuts: in-memory session/code store, ephemeral RS256 signing keys, no downstream client registry.*
+
+---
+
+## TL;DR
+
+- **Passage's three current shortcuts each violate or directly risk a normative requirement.** Ephemeral RS256 keys break signature continuity and the JWKS-rotation model clients depend on (OIDC Core §10.1.1); the in-memory store cannot guarantee one-time authorization-code use or replay windows across restarts/instances (RFC 6749 §4.1.2, §10.5); and the absent downstream client registry makes the **mandatory** exact `redirect_uri` match and `client_id` validation impossible (RFC 9700 §2.1 / §4.1.3).
+- **The broker is two OAuth roles back-to-back joined by a trust "seam."** Correctness requires the RP leg to fully validate the upstream ID Token per the 13-step OIDC Core §3.1.3.7 checklist, the OP leg to behave as a spec-compliant authorization server, and the seam to **re-mint** a Passage-signed token (Passage `iss`, downstream-client `aud`) rather than ever forwarding the upstream token, upstream signature, or raw upstream `sub` downstream.
+- **PKCE/S256 must be enforced on both legs, mix-up defended via the RFC 9207 `iss` parameter, and refresh tokens rotated with reuse detection.** RFC 9700 (BCP 240, January 2025) supersedes draft-ietf-oauth-security-topics and upgrades several base-spec SHOULDs into MUSTs — most importantly PKCE support/enforcement and exact `redirect_uri` matching.
+
+---
+
+## Key Findings
+
+1. **RFC 9700 is the controlling Best Current Practice.** Published January 2025 as BCP 240 (DOI 10.17487/RFC9700) by T. Lodderstedt (SPRIND), J. Bradley (Yubico), A. Labunets, and D. Fett (Authlete); it formally **"Updates: RFC 6749, RFC 6750, RFC 6819"** and supersedes the historical draft-ietf-oauth-security-topics. Cite RFC 9700 section numbers; the draft name is context only.
+
+2. **PKCE is required for all clients, including confidential ones.** RFC 9700 §2.1.1: *"Authorization servers MUST support PKCE [RFC7636]. If a client sends a valid PKCE `code_challenge` parameter in the authorization request, the authorization server MUST enforce the correct usage of `code_verifier` at the token endpoint."* The BCP also requires servers to **"mitigate PKCE downgrade attacks"** and notes the advice **"applies to all kinds of OAuth clients, including web applications."** S256 is the only challenge method that does not expose the verifier.
+
+3. **Exact `redirect_uri` matching is a MUST; pattern matching is deprecated.** RFC 9700 §2.1: *"When comparing client redirection URIs against pre-registered URIs, authorization servers MUST utilize exact string matching except for port numbers in localhost redirection URIs of native apps."* §4.1.3 adds the server *"MUST ensure that the two URIs are equal; see Section 6.2.1 of [RFC3986], Simple String Comparison"* and grounds the deprecation: *"This approach turned out to be more complex to implement and more error-prone to manage than exact redirection URI matching. Several successful attacks exploiting flaws in the pattern-matching implementation or concrete configurations have been observed in the wild."*
+
+4. **Entropy requirement is quantified, not approximate.** RFC 6749 §10.10 ("Credentials-Guessing Attacks"): *"The probability of an attacker guessing generated tokens (and other credentials not intended for handling by end-users) MUST be less than or equal to 2^(-128) and SHOULD be less than or equal to 2^(-160)."*
+
+---
+
+## REQUIREMENTS CHECKLIST (MUST / SHOULD)
+
+Normative keywords are as written in the cited specs. "RP leg" = Passage→upstream; "OP leg" = downstream→Passage; "Seam" = the translation point.
+
+### A. Flow & PKCE
+- **MUST** support and enforce PKCE as an OP: if a downstream client sends `code_challenge`, enforce `code_verifier` at the token endpoint, and reject token requests carrying `code_verifier` when no `code_challenge` was present (PKCE downgrade defense). — *RFC 9700 §2.1.1, §4.8.2*
+- **SHOULD** use PKCE with S256 on the RP leg to every upstream IdP (S256 is the only method that does not expose the verifier). — *RFC 9700 §2.1.1; RFC 7636 §4.2*
+- **MUST** use the Authorization Code grant and **MUST NOT** use the deprecated Implicit or ROPC grants. — *RFC 9700 §2.1.2, §2.4*
+
+### B. CSRF, nonce, state
+- **MUST** prevent CSRF on the redirection endpoint; either rely on PKCE (where the AS supports it) or use one-time `state` tokens bound to the user agent; OIDC `nonce` provides CSRF protection in OIDC flows. — *RFC 9700 §2.1; RFC 6749 §10.12*
+- **MUST**, as RP, send a `nonce` upstream and verify the returned `nonce` claim equals the value sent. — *OIDC Core §3.1.3.7 (step 11), §15.5.2*
+- **MUST**, as OP, include the `nonce` claim in issued ID Tokens unchanged when the downstream client supplied one. — *OIDC Core §2, §3.1.3.6*
+
+### C. redirect_uri & client registry
+- **MUST** register downstream clients and validate `client_id` and `redirect_uri` (exact string match) before trusting them. — *RFC 6749 §3.1.2.2; RFC 9700 §2.1, §4.1.3; OIDC Core §3.1.2.1*
+- **MUST NOT** expose open redirectors. — *RFC 9700 §2.1, §4.11*
+- **MUST**, if `redirect_uri` is invalid/unregistered, **not** redirect to it — respond directly to the user agent instead. — *OIDC Core §3.1.2.6; RFC 6749 §4.1.2.1*
+
+### D. Upstream ID Token validation (RP leg) — OIDC Core §3.1.3.7
+Apply the full numbered checklist; the load-bearing MUSTs:
+- **MUST** verify the upstream Issuer Identifier **exactly matches** the `iss` claim. — *step 2*
+- **MUST** verify `aud` contains Passage's upstream `client_id`; reject if Passage is not a listed audience or if untrusted additional audiences are present. — *step 3*
+- **SHOULD** validate `azp` when present and verify it equals Passage's `client_id` (relevant when `aud` is multi-valued). — *steps 4–5*
+- **MUST** validate the signature per JWS using the `alg` header and **MUST** use keys provided by the issuer (via `jwks_uri`); the `alg` **SHOULD** be the registered/default (e.g. RS256). — *steps 6–7*
+- **MUST** verify current time is before `exp`; **MAY** reject tokens with `iat` too far in the past. — *steps 9–10*
+- **MUST** reject `alg: none` (the prohibition lives in OIDC Core §2: *ID Tokens MUST NOT use `none` …* except code flow with explicit registration) and **MUST** restrict to an allow-list of expected algorithms to prevent algorithm-confusion. — *OIDC Core §2 + §3.1.3.7 step 7; RFC 8725*
+- **MAY** validate `at_hash` if present (code flow); the comparison rule itself is §3.2.2.9. — *OIDC Core §3.1.3.8*
+
+### E. Seam (translation)
+- **MUST NOT** forward the upstream ID Token, upstream signature, or upstream access token to downstream clients; Passage re-mints its own ID/access tokens.
+- **MUST** set issued-token `iss` to Passage's own issuer URL and `aud` to the downstream `client_id`. — *OIDC Core §2*
+- **SHOULD** map the upstream `sub` to a broker-controlled identifier; **SHOULD** offer pairwise pseudonymous subject identifiers so downstream clients cannot correlate users (sector identifier = host of client redirect URI). — *OIDC Core §8, §8.1*
+- **SHOULD** practice claim minimization — pass through only needed claims, not the entire upstream claim set.
+
+### F. Downstream token issuance (OP leg)
+- **MUST** issue ID Tokens signed with JWS; scope→claims mapping per OIDC Core §5.4 (note: profile/email/etc. claims are returned from the UserInfo endpoint, not the ID Token, when an access token is also issued). — *OIDC Core §3.1.3.6, §5.4, §5.3.2*
+- If issuing **JWT access tokens**, **MUST** set the `typ` header to `at+jwt`, include `iss`/`exp`/`aud`/`sub`/`client_id`/`iat`/`jti`, and use a distinct `aud` per resource to prevent cross-JWT confusion; **MUST NOT** use `alg: none`. — *RFC 9068 §2.1, §2.2, §3*
+- Opaque access tokens are an acceptable alternative (treated opaquely by clients per RFC 6749).
+
+### G. Authorization code (OP leg)
+- **MUST** make codes single-use; **MUST** deny on reuse and **SHOULD** revoke all tokens previously issued for that code; max lifetime 10 min **RECOMMENDED**. — *RFC 6749 §4.1.2*: *"A maximum authorization code lifetime of 10 minutes is RECOMMENDED. The client MUST NOT use the authorization code more than once. If an authorization code is used more than once, the authorization server MUST deny the request and SHOULD revoke (when possible) all tokens previously issued based on that authorization code."*
+- **MUST** bind each code to `client_id`, `redirect_uri`, and the PKCE `code_challenge`, and store it securely. — *RFC 6749 §4.1.2, §10.5; RFC 7636 §4.4–4.6*
+
+### H. Refresh tokens (OP leg)
+- **MUST**, for public downstream clients, either sender-constrain refresh tokens or use refresh-token rotation. — *RFC 9700 §2.2.2*: *"Refresh tokens for public clients MUST be sender-constrained or use refresh token rotation as described in Section 4.14."*
+- **SHOULD** implement reuse detection and revoke the entire token family on detected reuse; **SHOULD** bound lifetime. — *RFC 9700 §4.14.2; RFC 6749 §6, §10.4*
+
+### I. Token replay / sender-constraining
+- **SHOULD** sender-constrain access tokens via mTLS (RFC 8705) or DPoP (RFC 9449) to prevent misuse of leaked tokens. — *RFC 9700 §2.2.1*
+
+### J. Mix-up defense (RP leg, multiple upstream IdPs)
+- **REQUIRED** (since Passage talks to >1 AS) to defend against mix-up; **SHOULD** use the RFC 9207 `iss` authorization-response parameter, or distinct per-IdP redirect URIs. — *RFC 9700 §2.1, §4.4; RFC 9207 §2*
+
+### K. Key management
+- **MUST** persist signing keys across restarts/instances (replaces ephemeral keys). — *implied by OIDC Core §10.1.1*
+- **SHOULD** support multiple active `kid`s in the JWKS during rotation (publish new key before signing with it; retain old key for a retirement window). — *OIDC Core §10.1.1*
+- **MUST** publish `jwks_uri` over HTTPS; clients cache and select by `kid`. — *OIDC Discovery §3; RFC 8414 §2*
+
+### L. Discovery metadata (`/.well-known/openid-configuration`)
+- **MUST** publish (REQUIRED per OIDC Discovery §3): `issuer`, `authorization_endpoint`, `jwks_uri`, `response_types_supported`, `subject_types_supported`, `id_token_signing_alg_values_supported` (which **MUST include RS256**). `token_endpoint` is REQUIRED unless only Implicit Flow is used. — *OIDC Discovery 1.0 §3*
+- **RECOMMENDED**: `userinfo_endpoint`, `scopes_supported` (MUST support `openid`), `claims_supported`. **RECOMMENDED** to publish `code_challenge_methods_supported` so clients can detect PKCE. — *OIDC Discovery §3; RFC 9700 §2.1.1*
+
+### M. Logout
+- **SHOULD** implement RP-Initiated Logout: accept `id_token_hint` (RECOMMENDED) and a pre-registered `post_logout_redirect_uri`; when `id_token_hint` is present the OP **MUST** validate it issued that ID Token. — *OIDC RP-Initiated Logout 1.0 §2, §3*
+- **SHOULD** propagate logout downstream via Front-Channel and/or Back-Channel Logout (back-channel sends a signed Logout Token to each RP's `backchannel_logout_uri`), and, as RP, propagate logout upstream by calling the upstream `end_session_endpoint`. — *OIDC Front-Channel Logout 1.0; OIDC Back-Channel Logout 1.0*
+
+### N. Error handling
+- **MUST** return authorization errors to the (validated) `redirect_uri` with `error`/`state`; if the `redirect_uri` is invalid, respond directly to the user agent. Standard authorization-endpoint codes: `invalid_request`, `unauthorized_client`, `access_denied`, `unsupported_response_type`, `invalid_scope`, `server_error`, `temporarily_unavailable`. — *RFC 6749 §4.1.2.1*
+- Token-endpoint errors: `invalid_request`, `invalid_client`, `invalid_grant`, `unauthorized_client`, `unsupported_grant_type`, `invalid_scope`; HTTP 400 except `invalid_client` which **MAY** be 401. — *RFC 6749 §5.2*
+
+### O. Entropy & transport
+- **MUST** generate `state`, authorization codes, and `nonce` with guessing probability ≤ 2^-128 (SHOULD ≤ 2^-160). — *RFC 6749 §10.10*
+- **MUST** use TLS on all authorization/token/UserInfo endpoint communication. — *RFC 6749 §3.1, §3.2; OIDC Core §16.17*
+
+---
+
+## GAPS & CONCERNS (risky-but-common shortcuts in Passage today)
+
+| Shortcut | Why it's risky | Spec it violates/risks |
+|---|---|---|
+| **Ephemeral RS256 keys** | On every restart/redeploy the private key changes, so previously issued Passage ID/access tokens become unverifiable and the published JWKS goes stale; multi-instance deployments serve inconsistent keys, breaking signature verification. No overlap window for rotation. | OIDC Core §10.1.1 (rotation: publish new key, retain old during transition); OIDC Discovery §3 (`jwks_uri` stability expectation) |
+| **In-memory session/code store** | Cannot guarantee **one-time** code use across instances (a code redeemed on instance A is still "fresh" on instance B → replay); restart drops in-flight `state`/`nonce`/PKCE bindings; no shared replay-detection window for refresh-token reuse. | RFC 6749 §4.1.2, §10.5 (single-use codes + revoke-on-reuse); RFC 9700 §4.14.2 (refresh reuse detection); §10.10 (state storage to limit replay window) |
+| **No downstream client registry** | Without registered clients you cannot do exact `redirect_uri` matching or `client_id` validation — the single most important open-redirect / code-exfiltration / mix-up defense. Also blocks per-client `subject_type`, logout URIs, and allowed scopes. | RFC 6749 §3.1.2.2; RFC 9700 §2.1, §4.1.3; OIDC Core §3.1.2.1 |
+| **Passing upstream `sub` through verbatim** | Leaks the upstream namespace, enables cross-client correlation, and couples Passage identities to upstream identifier churn. | OIDC Core §8 (broker-controlled / pairwise identifiers recommended) |
+| **Forwarding the upstream token downstream** | Defeats the entire broker model; downstream clients would trust the upstream signature/audience, enabling token substitution and audience confusion. | OIDC Core §2 (`aud`/`iss` semantics), §16.11 (Token Substitution) |
+| **Relying on `state` only / no PKCE on a leg** | Code-injection variants succeed when PKCE is absent and `state` is mishandled. | RFC 9700 §2.1.1, §4.5, §4.8 |
+| **HTTP 307 for auth redirects** | 307 preserves the request method and body, re-POSTing credentials to the next hop. | OIDC Core §16.22 (use 303) |
+| **Permissive algorithm acceptance** | Accepting attacker-chosen `alg` enables RS256→HS256 confusion (public key used as HMAC secret) and `alg:none` bypass. | OIDC Core §2, §3.1.3.7 step 7; RFC 8725 |
+
+---
+
+## THREAT → MITIGATION TABLE
+
+| Threat | Mitigation | Citation |
+|---|---|---|
+| **IdP mix-up** (Passage talks to multiple upstream IdPs; attacker confuses which AS issued the response) | Validate the RFC 9207 `iss` authorization-response parameter against the expected upstream; or use distinct per-IdP redirect URIs. Required because Passage interacts with >1 AS. | RFC 9207 §2; RFC 9700 §2.1, §4.4 |
+| **Authorization-code injection / replay** | Enforce PKCE/S256 on both legs; verify `nonce`; bind code to `client_id`/`redirect_uri`/`code_challenge`; single-use codes with revoke-on-reuse. | RFC 7636; RFC 9700 §2.1.1, §4.5, §4.8; RFC 6749 §4.1.2 |
+| **Token substitution / audience confusion** | Strict `aud` validation on the RP leg (reject if Passage not an audience or untrusted extra audiences); distinct `aud` per downstream resource; `at+jwt` typing for JWT access tokens. | OIDC Core §3.1.3.7 step 3, §16.11; RFC 9068 §2.2, §3 |
+| **Algorithm confusion (RS256→HS256) / `alg:none` downgrade** | Pin an explicit algorithm allow-list per issuer; never derive verification algorithm from the token header; reject `none`; never use a public key as an HMAC secret. (jose v6 requires explicit `algorithms` — use it.) | OIDC Core §2, §3.1.3.7 step 7; RFC 8725 |
+| **Key confusion / forged tokens after key compromise** | Persist keys; rotate with overlapping `kid`s; publish `jwks_uri` over HTTPS; verify the upstream token signature against the upstream issuer's keys only. | OIDC Core §10.1.1; OIDC Core §3.1.3.7 step 6 |
+| **Upstream-token replay against the broker** | Verify `exp`/`iat`, single-use `nonce` with replay detection, and code single-use; bound the `iat` acceptance window. | OIDC Core §3.1.3.7 steps 9–11 |
+| **Credential leakage via 302/307 redirect** | Use HTTP 303 for redirects after POST; never 307 (preserves body/credentials); suppress `Referer` (Referrer-Policy: no-referrer); use code response type, not token in fragment. | OIDC Core §16.22; RFC 9700 §4.2.4 |
+| **Open-redirect exfiltration of codes/tokens** | Exact `redirect_uri` match against the registry; no open redirectors; optional `#_` fragment on Location to block fragment reattachment. | RFC 9700 §2.1, §4.1.3, §4.11 |
+| **CSRF on redirection endpoint** | One-time `state` bound to user agent and/or PKCE; verify `nonce` in OIDC. | RFC 9700 §2.1; RFC 6749 §10.12 |
+| **Refresh-token theft (public clients)** | Rotation + reuse detection (revoke family on reuse) or sender-constraining (mTLS/DPoP). | RFC 9700 §2.2.2, §4.14.2 |
+| **Stolen access-token replay** | Sender-constrain via mTLS (RFC 8705) or DPoP (RFC 9449); short lifetimes; audience restriction. | RFC 9700 §2.2.1 |
+| **Session fixation at the broker** | Regenerate session identifiers after authentication; bind session to the authenticated principal; do not accept attacker-fixed session IDs. | RFC 9700 §4.7 (CSRF/session); OIDC Core §16.9, §16.11 |
+| **Cross-client user correlation** | Pairwise pseudonymous subject identifiers per sector (host of redirect URI). | OIDC Core §8, §8.1 |
+
+---
+
+## Recommendations
+
+Staged, concrete next steps for Passage. Each stage lists the benchmark that should gate moving on.
+
+**Stage 0 — immediate hardening (no architecture change):**
+- In `jose` v6, pass an explicit `algorithms` allow-list (e.g. `["RS256"]`) to every `jwtVerify`/`compactVerify` call on the RP leg, and reject `alg: none`. This closes algorithm-confusion with one config change.
+- Ensure all auth redirects use HTTP **303**, never 307; add `Referrer-Policy: no-referrer` on authorization-response pages.
+- Confirm `nonce` is sent upstream and verified, and `state` is one-time and user-agent-bound.
+- *Threshold to proceed:* a unit test suite proving an `alg:none` token, an HS256-forged token, and a reused authorization code are all rejected.
+
+**Stage 1 — fix the three shortcuts (highest priority):**
+1. **Persist signing keys** in durable storage (file/KMS/secret store) shared across instances; expose them at `jwks_uri` with stable `kid`s. Build the rotation routine to *publish-before-sign* and retain the prior key for a retirement window.
+2. **Replace the in-memory store** with a shared, durable store (e.g. Redis/Postgres) for codes, `state`/`nonce`/PKCE bindings, and sessions. Enforce atomic single-use code redemption (delete-on-read / compare-and-swap) so replay fails across instances.
+3. **Build the downstream client registry** (client_id, secret/auth method, exact `redirect_uris`, allowed scopes, `subject_type`, logout URIs). Enforce exact `redirect_uri` string match and `client_id` validation at the authorization endpoint.
+- *Threshold to proceed:* restart/redeploy no longer invalidates issued tokens; a code redeemed on one instance is rejected on another; an unregistered `redirect_uri` is refused without redirecting.
+
+**Stage 2 — full OP compliance:**
+- Publish complete discovery metadata (all REQUIRED fields incl. RS256 in `id_token_signing_alg_values_supported`, plus `code_challenge_methods_supported: ["S256"]`).
+- Re-mint downstream tokens at the seam with Passage `iss`, downstream `aud`, broker-controlled/pairwise `sub`, and scope→claims mapping (claims via UserInfo when an access token is issued).
+- Implement standard error responses (authorization §4.1.2.1 and token §5.2 codes).
+- Refresh-token rotation with reuse detection and family revocation.
+- *Threshold to proceed:* passes an OIDC conformance suite for the basic OP profile.
+
+**Stage 3 — logout & aspirational hardening:**
+- RP-Initiated Logout (`id_token_hint`, `post_logout_redirect_uri`), plus Back-Channel Logout downstream and upstream `end_session_endpoint` propagation.
+- **FAPI 2.0 stretch target** (only if Passage handles high-value data): mandatory PAR (RFC 9126), sender-constrained tokens via DPoP (RFC 9449) or mTLS (RFC 8705), confidential clients only, and `private_key_jwt`/mTLS client authentication. These exceed baseline OAuth/OIDC and should be adopted deliberately, not by default.
+- *Trigger to escalate to FAPI:* Passage begins brokering regulated/financial-grade data or a partner/regulator requires it.
+
+---
+
+## Caveats
+
+- **RFC 9700 is recent (January 2025)** and represents current consensus; some library defaults and older deployments still reflect the weaker pre-9700 SHOULDs. Where 9700 strengthens a base-spec SHOULD into a MUST (PKCE support/enforcement, exact `redirect_uri` matching), this report follows 9700.
+- **The "reject `none`/unexpected algorithm" rule is not a single numbered step in OIDC Core §3.1.3.7.** It is the combination of §3.1.3.7 step 7 (alg SHOULD be the registered/default) and the §2 prohibition on `none`. Treat the algorithm allow-list as a hard MUST in implementation even though the spec expresses it across two locations.
+- **`at_hash` validation in the Authorization Code Flow is MAY (optional)** per OIDC Core §3.1.3.8; it is only REQUIRED in the Implicit Flow when an access token is returned from the authorization endpoint. Since Passage uses code+PKCE, treat `at_hash` as a defense-in-depth nicety, not a gating requirement.
+- **`token_endpoint` in OIDC Discovery** lacks a one-word "REQUIRED" label; it is "REQUIRED unless only the Implicit Flow is used" — effectively REQUIRED for Passage.
+- **FAPI 2.0 references** are drawn from the FAPI 2.0 Security Profile (Final/Draft); they are an aspirational hardening target, not baseline conformance.
+- A handful of corroborating details (rotation overlap windows, reuse-detection mechanics) come from vendor documentation (Auth0, Duende, Connect2id) rather than the RFC text; these illustrate accepted practice but the normative authority remains the cited spec sections.
