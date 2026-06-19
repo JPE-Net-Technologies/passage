@@ -121,23 +121,27 @@ describe('Discovery route', () => {
     upstreamOidc.reset();
   });
 
-  it('serves upstream metadata, and 500s when the upstream is unregistered', async () => {
+  it('serves Passage own discovery doc, and 500s a provider with no issuer', async () => {
     const config = buildTestConfig({
       providers: {
         providers: [
-          provider() as any,
-          provider({name: 'oidc-broken', ServerConfig: {endpoint_url: 'oidc-broken', client_id: 'd2'},
-            OidcConfig: {upstream_issuer: 'http://broken/realms/x'}}) as any,
+          provider({OidcConfig: {issuer: 'http://localhost:3000/oidc-full'}}) as any,
+          // a provider with no Passage issuer → buildDiscoveryDocument throws → 500
+          provider({name: 'oidc-noiss', ServerConfig: {endpoint_url: 'oidc-noiss', client_id: 'd2'}}) as any,
         ],
       },
     });
     const app = await createApp(config);
 
+    // Passage's own metadata (NOT the upstream's): issuer-derived endpoints, RS256 advertised.
     const ok = await request(app).get('/oidc-full/.well-known/openid-configuration').expect(200);
-    expect(ok.body.issuer).toBe(FAKE_METADATA.issuer);
+    expect(ok.body.issuer).toBe('http://localhost:3000/oidc-full');
+    expect(ok.body.token_endpoint).toBe('http://localhost:3000/oidc-full/token');
+    expect(ok.body.jwks_uri).toBe('http://localhost:3000/oidc-full/jwks');
+    expect(ok.body.id_token_signing_alg_values_supported).toContain('RS256');
+    expect(ok.body.code_challenge_methods_supported).toContain('S256');
 
-    // The broken provider's discovery failed at registration but its route is still mounted.
-    const bad = await request(app).get('/oidc-broken/.well-known/openid-configuration').expect(500);
+    const bad = await request(app).get('/oidc-noiss/.well-known/openid-configuration').expect(500);
     expect(bad.body.error).toBeDefined();
   });
 });

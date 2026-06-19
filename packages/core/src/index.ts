@@ -43,6 +43,7 @@ export type {
   UpstreamConfigProvider,
   SessionStore,
 } from './services/oidc/federation.service';
+export {buildDiscoveryDocument} from './services/oidc/discovery.service';
 export {grantService, GrantService, GrantError, defaultSubjectMapper} from './services/oidc/grant.service';
 export type {
   GrantServiceOptions,

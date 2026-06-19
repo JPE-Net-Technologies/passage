@@ -6,6 +6,7 @@ import {sessionService} from "../services/oidc/session.service";
 import {federationService, FederationError} from "../services/oidc/federation.service";
 import {tokenService} from "../services/oidc/token.service";
 import {grantService, GrantError} from "../services/oidc/grant.service";
+import {buildDiscoveryDocument} from "../services/oidc/discovery.service";
 import {AuthorizationRequestSchema, TokenRequestSchema} from "../utils/schemas/oidc.schemas";
 import {logger} from "../utils/logger";
 
@@ -28,12 +29,11 @@ function attachOidcProvider(app: Application, provider: ProviderEntryType) {
   const basePath = `/${provider.ServerConfig.endpoint_url}`;
   logger.debug(`Setting up OIDC routes for provider: ${provider.name} at ${basePath}`);
 
-  // Discovery Endpoint - returns the upstream provider's metadata
+  // Discovery Endpoint - returns Passage's OWN OIDC metadata for this provider authority
+  // (the endpoints downstream clients use), NOT the upstream provider's metadata.
   app.get(`${basePath}/.well-known/openid-configuration`, (req, res) => {
     try {
-      const config = upstreamOidc.getConfig(provider.name);
-      // serverMetadata() returns the OIDC discovery document (AuthorizationServer)
-      res.json(config.serverMetadata());
+      res.json(buildDiscoveryDocument(provider));
     } catch (error: any) {
       logger.error(`Discovery error for ${provider.name}:`, error);
       res.status(500).json({error: error.message});
