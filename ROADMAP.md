@@ -42,18 +42,36 @@ Passage is the **core identity layer** around which an ecosystem of declarative,
 - [x] Docker Compose development environment (Keycloak, Postgres, MongoDB)
 - [x] OIDC type definitions and validation schemas
 - [x] **Package-first distribution**: bun-workspace monorepo — `@passage/core` (config injected, no cwd coupling) + runnable presets under `examples/`
-- [x] **100% line/statement coverage** gate on the core (`bunfig.toml`)
-- [ ] Core OIDC services (JWKS, Token, Session, Discovery)
-- [ ] OIDC route handlers
-- [ ] Upstream provider federation (discovery wired; token/userinfo pending)
+- [x] **100% line/statement coverage** gate on the core (`bunfig.toml`), plus **100% Stryker mutation** on the logger-free OIDC services
+- [x] Core OIDC services (JWKS, Token, Session, Discovery)
+- [x] OIDC route handlers (`/authorize`, `/callback`, `/token`, `/userinfo`, `/jwks`, discovery)
+- [x] Upstream provider federation (discovery + auth-code exchange + userinfo)
 
 ---
 
 ## Near-Term Roadmap
 
-### Phase 2: Core OIDC Implementation
+### Quick Wins (high-leverage, easy to test)
 
-Complete the identity broker functionality:
+Small additions that mostly reuse substrate already built (client registry,
+`sessionService.revokeRefreshFamily`, the request schemas, the security config) — each is a
+thin route/service slice with a clear unit + E2E test, and each closes a visible gap:
+
+- **RP-Initiated Logout** (`/end_session`) — `LogoutRequestSchema` already exists, and the
+  client registry makes `post_logout_redirect_uri` validation a one-liner. Clears the session;
+  best-effort upstream propagation.
+- **Token Revocation** (RFC 7009, `/revoke`) — reuses `revokeRefreshFamily`.
+- **Token Introspection** (RFC 7662, `/introspect`) — reuses `tokenService.verify` / refresh lookup.
+- **Mix-up defense** — add the RFC 9207 `iss` parameter to the downstream authorization response.
+- **Per-client policy enforcement** — `pkce_required` + `allowed_scopes` at `/authorize` (registry
+  fields already defined; enforcement was deferred from Increment 6).
+- **Config-driven CORS** — wire the existing `security.cors` config (currently hardcoded in middleware).
+- **Advertise new endpoints** in discovery (`end_session_endpoint`, `revocation_endpoint`,
+  `introspection_endpoint`) as each lands.
+
+### Phase 2: Core OIDC Implementation ✓ (complete)
+
+Identity broker functionality (all shipped at 100% line + mutation):
 
 - **JWKS Service** - Key generation, rotation, public key exposure
 - **Token Service** - JWT issuance, validation, refresh token management
@@ -61,9 +79,12 @@ Complete the identity broker functionality:
 - **Discovery Service** - Dynamic OIDC discovery document generation
 - **Upstream Federation** - Exchange tokens with Keycloak, Auth0, Okta, Azure AD
 
-### Phase 3: Client Management
+### Phase 3: Client Management (in progress)
 
-Declarative client registration:
+Declarative client registration. **Landed:** the registry + exact `redirect_uri` / `client_id`
+validation at `/authorize`. **Remaining:** client authentication at `/token`
+(`client_secret_basic`/`_post`, `none`), and `allowed_grants` / `allowed_scopes` / `pkce_required`
+enforcement (see Quick Wins).
 
 ```yaml
 # config/clients.yaml
@@ -83,15 +104,24 @@ clients:
     allowed_scopes: ["api:read", "api:write"]
 ```
 
-### Phase 4: User Store Abstraction
+### Phase 4: Storage Abstraction
 
-Pluggable user storage backends:
+Today every stateful store (authorization sessions, one-time codes, refresh-token families, the
+claims store, the client registry) is an in-memory `Map` behind a narrow consumer interface.
+Consumers are already decoupled; the next step is to make the **backend pluggable** and ship
+durable adapters. This is a *correctness* requirement, not just scale: a single-instance
+in-memory store cannot guarantee one-time code use or refresh-token reuse detection across
+restarts/instances (broker correctness gate §11.5).
 
-- **In-Memory** - Development and testing
-- **MongoDB** - Document-based user profiles
-- **PostgreSQL** - Relational user management
-- **LDAP/AD** - Enterprise directory integration
-- **Upstream-Only** - Stateless federation (no local user store)
+- **`StorageAdapter` contract** - one injectable backend spanning sessions / codes / refresh
+  families / claims / client registry, selectable at `createApp` (the same adapter pattern as
+  email/secrets/observability — see below).
+- **Redis** - natural fit for the ephemeral, single-use, replay-cache stores.
+- **PostgreSQL / SQLite** - durable client registry, users, refresh families, audit.
+- **MongoDB** - document-based user profiles (already in the dev compose).
+- **Key persistence** - persist JWKS signing keys with overlapping-`kid` rotation (gate Stage 1)
+  so issued tokens stay verifiable across restarts/instances; ties into LocalKMS.
+- **User store backends** - In-Memory / PostgreSQL / MongoDB / LDAP-AD / Upstream-Only (stateless).
 
 ---
 
@@ -222,6 +252,10 @@ A package ecosystem for common identity patterns:
 | `@passage/session-redis` | Redis-backed session storage |
 | `@passage/impersonation` | Admin user impersonation |
 | `@passage/magic-link` | Passwordless email authentication |
+| `@passage/email` | Transactional email adapter (Resend / SES / Cloudflare / Postmark / SMTP) |
+| `@passage/webhooks` | Reliable outbound event delivery to downstream apps (Svix-style) |
+| `@passage/consent` | OAuth consent screen for third-party clients |
+| `@passage/scim` | SCIM 2.0 provisioning server (just-in-time + timely deprovisioning) |
 
 #### Package Configuration
 
@@ -257,6 +291,8 @@ Deep integrations for enterprise scenarios:
 - **Certificate Authentication** - mTLS client certificate auth
 - **Hardware Security Modules** - HSM integration for key storage
 - **Secrets Manager Integration** - AWS Secrets Manager, HashiCorp Vault, Azure Key Vault
+- **OIDC Conformance Harness** - run the official OpenID conformance suite in CI
+- **Observability** - OpenTelemetry traces/metrics adapter (same injectable-adapter pattern)
 
 ### Phase 9: Multi-Tenancy
 
@@ -289,6 +325,31 @@ Multiple runtime modes:
 | **Sidecar** | Kubernetes sidecar container |
 | **Edge** | Cloudflare Workers / Deno Deploy / Vercel Edge |
 | **Serverless** | AWS Lambda / Google Cloud Functions |
+
+### Phase 11: Management Dashboard
+
+An admin UI (**Next.js** — same stack as the docs, one frontend toolchain) over the declarative
+core: manage clients, providers, and keys; browse/revoke users and sessions; view the audit log;
+trigger key rotation; diff live config. A thin operability layer over the same validated config +
+stores — never a second source of truth.
+
+### Phase 12: End-to-End Test Harness
+
+Browser-level coverage to complement the unit + 100% mutation gate:
+
+- **Auth-flow E2E** (Playwright) — drive a real login through `/authorize` → upstream (Keycloak
+  from the dev compose) → `/callback` → `/token` → a sample downstream app, asserting the re-minted
+  token and `/userinfo`.
+- **Dashboard UI tests** (Playwright) — client/provider CRUD, session revocation, key rotation.
+- Runs against the docker-compose stack in CI; the natural home for the OIDC conformance suite.
+
+### Phase 13: Declarative Admin & Infrastructure-as-Code
+
+The "Terraform of dev practices" made literal — manage Passage's declarative resources as code:
+
+- **Passage Terraform provider** — `terraform apply` your client/provider registry.
+- **Config-as-code CLI** — validate, diff, and push config; GitOps-friendly.
+- **Drift checks** — CI gate that the running broker matches declared config.
 
 ---
 
