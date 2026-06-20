@@ -288,6 +288,27 @@ describe('GrantService — refresh_token grant', () => {
   });
 });
 
+describe('GrantService — revoke (RFC 7009)', () => {
+  it('rejects revoke before initialization', () => {
+    const svc = new GrantService();
+    expect(() => svc.revoke('rt')).toThrow('not initialized');
+  });
+
+  it('revokes the whole family of a known refresh token', () => {
+    const {svc, captured} = makeService({raw: refreshRecord({token: 'RT-9', family_id: 'fam-9'})});
+    svc.revoke('RT-9');
+    expect(captured.foundRefresh).toBe('RT-9');
+    expect(captured.revokedFamily).toBe('fam-9');
+  });
+
+  it('is a silent no-op for an unknown token', () => {
+    const {svc, captured} = makeService({raw: undefined});
+    svc.revoke('nope');
+    expect(captured.foundRefresh).toBe('nope');
+    expect(captured.revokedFamily).toBeUndefined();
+  });
+});
+
 describe('GrantService — unsupported grants & lifecycle', () => {
   it('rejects an unsupported grant_type', async () => {
     const {svc} = makeService();

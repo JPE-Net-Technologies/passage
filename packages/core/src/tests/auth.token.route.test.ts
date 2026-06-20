@@ -122,6 +122,33 @@ describe('POST /:provider/token — authorization_code', () => {
   });
 });
 
+describe('POST /:provider/revoke', () => {
+  it('revokes a refresh token so it can no longer be used (200)', async () => {
+    const code = await obtainCode();
+    const first = await request(app).post('/oidc-x/token').type('form').send({
+      grant_type: 'authorization_code', code, redirect_uri: 'https://app.test/cb', client_id: 'downstream', code_verifier: VERIFIER,
+    }).expect(200);
+    const rt = first.body.refresh_token;
+
+    await request(app).post('/oidc-x/revoke').type('form').send({token: rt}).expect(200);
+
+    // the revoked token's family is dead → a refresh with it is rejected
+    const refused = await request(app).post('/oidc-x/token').type('form').send({
+      grant_type: 'refresh_token', refresh_token: rt, client_id: 'downstream',
+    }).expect(400);
+    expect(refused.body.error).toBe('invalid_grant');
+  });
+
+  it('400s a revocation with no token', async () => {
+    const res = await request(app).post('/oidc-x/revoke').type('form').send({}).expect(400);
+    expect(res.body.error).toBe('invalid_request');
+  });
+
+  it('200s an unknown token (silent no-op)', async () => {
+    await request(app).post('/oidc-x/revoke').type('form').send({token: 'not-a-real-token'}).expect(200);
+  });
+});
+
 describe('POST /:provider/token — refresh_token', () => {
   it('rotates the refresh token and detects reuse, killing the family', async () => {
     const code = await obtainCode();

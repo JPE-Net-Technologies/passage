@@ -35,8 +35,9 @@ export interface OIDCDiscoveryDocument {
     token_endpoint_auth_signing_alg_values_supported?: SigningAlgorithm[];
     code_challenge_methods_supported?: CodeChallengeMethod[];
 
-    // Logout endpoints
+    // Logout + token-management endpoints
     end_session_endpoint?: string;
+    revocation_endpoint?: string;
 
     // Additional metadata
     service_documentation?: string;

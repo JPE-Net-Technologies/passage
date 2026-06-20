@@ -150,6 +150,19 @@ class GrantService {
   }
 
   /**
+   * Revoke a token (RFC 7009). Revokes the whole family of a presented refresh token; a token that
+   * is unknown (or a stateless access token, which has no server-side record) is a silent no-op —
+   * the endpoint still responds 200 either way.
+   */
+  revoke(token: string): void {
+    this.ensureInitialized();
+    const rt = this.sessions.findRefreshToken(token);
+    if (rt) {
+      this.sessions.revokeRefreshFamily(rt.family_id);
+    }
+  }
+
+  /**
    * authorization_code: redeem the one-time code, bind it to the originating client_id/redirect_uri,
    * verify PKCE, re-mint the subject, and issue Passage-signed tokens.
    */

@@ -111,8 +111,19 @@ function attachOidcProvider(app: Application, provider: ProviderEntryType) {
   app.get(`${basePath}/userinfo`, userInfoHandler);
   app.post(`${basePath}/userinfo`, userInfoHandler);
 
+  // Revocation Endpoint (RFC 7009) - revoke a refresh token (and its whole family). Always 200.
+  app.post(`${basePath}/revoke`, (req, res) => {
+    // TODO(client-auth, Inc 8): the revocation endpoint should authenticate the client (RFC 7009 §2.1).
+    const token = req.body?.token;
+    if (!token) {
+      res.status(400).json({error: 'invalid_request'});
+      return;
+    }
+    grantService.revoke(token);
+    res.status(200).end();
+  });
+
   // TODO OPT. Introspection Endpoint
-  // TODO OPT. Revocation Endpoint
   // TODO OPT. End Session Endpoint
   // TODO OPT. Registration Endpoint
   // TODO OPT. Device Authorization Endpoint

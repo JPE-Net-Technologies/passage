@@ -20,6 +20,7 @@ describe('buildDiscoveryDocument', () => {
       token_endpoint: 'https://iss.test/oidc-x/token',
       userinfo_endpoint: 'https://iss.test/oidc-x/userinfo',
       jwks_uri: 'https://iss.test/oidc-x/jwks',
+      revocation_endpoint: 'https://iss.test/oidc-x/revoke',
       response_types_supported: ['code'],
       subject_types_supported: ['public'],
       id_token_signing_alg_values_supported: ['RS256'],
