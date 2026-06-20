@@ -5,6 +5,8 @@ clients:
     client_type: public
     redirect_uris:
       - "http://localhost:8081/callback"
+    post_logout_redirect_uris:
+      - "http://localhost:8081/"
     allowed_scopes:
       - openid
       - profile

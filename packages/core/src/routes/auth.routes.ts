@@ -8,16 +8,17 @@ import {tokenService} from "../services/oidc/token.service";
 import {grantService, GrantError} from "../services/oidc/grant.service";
 import {clientRegistry} from "../services/oidc/client-registry.service";
 import {userInfoService, UserInfoError, extractBearerToken} from "../services/oidc/userinfo.service";
+import {logoutService, LogoutError} from "../services/oidc/logout.service";
 import {buildDiscoveryDocument} from "../services/oidc/discovery.service";
-import {AuthorizationRequestSchema, TokenRequestSchema} from "../utils/schemas/oidc.schemas";
+import {AuthorizationRequestSchema, TokenRequestSchema, LogoutRequestSchema} from "../utils/schemas/oidc.schemas";
 import {logger} from "../utils/logger";
 
 /** Map an OAuth error code to an HTTP status (server_error ⇒ 500, client errors ⇒ 400). */
 const statusFor = (code: string): number => (code === 'server_error' ? 500 : 400);
 
-/** Send an OAuth error response; a FederationError/GrantError carries its own code, anything else is a server_error. */
+/** Send an OAuth error response; a FederationError/GrantError/LogoutError carries its own code, anything else is a server_error. */
 function sendOAuthError(res: Response, error: unknown): void {
-  const code = error instanceof FederationError || error instanceof GrantError ? error.code : 'server_error';
+  const code = error instanceof FederationError || error instanceof GrantError || error instanceof LogoutError ? error.code : 'server_error';
   res.status(statusFor(code)).json({error: code});
 }
 
@@ -114,7 +115,7 @@ function attachOidcProvider(app: Application, provider: ProviderEntryType) {
   // Revocation Endpoint (RFC 7009) - revoke a refresh token (and its whole family). Always 200.
   app.post(`${basePath}/revoke`, (req, res) => {
     // TODO(client-auth, Inc 8): the revocation endpoint should authenticate the client (RFC 7009 §2.1).
-    const token = req.body?.token;
+    const token = req.body.token; // body is always an object (express.urlencoded is mounted)
     if (!token) {
       res.status(400).json({error: 'invalid_request'});
       return;
@@ -123,8 +124,30 @@ function attachOidcProvider(app: Application, provider: ProviderEntryType) {
     res.status(200).end();
   });
 
+  // End Session Endpoint (RP-Initiated Logout) - validate the request, then redirect to a registered
+  // post_logout_redirect_uri or return a confirmation. OIDC requires both GET and POST.
+  const endSessionHandler = async (req: Request, res: Response) => {
+    const source = req.method === 'POST' ? req.body : req.query;
+    const parsed = LogoutRequestSchema.safeParse(source);
+    if (!parsed.success) {
+      res.status(400).json({error: 'invalid_request', error_description: parsed.error.issues[0].message});
+      return;
+    }
+    try {
+      const {redirectUrl} = await logoutService.endSession({...parsed.data, issuer: provider.OidcConfig!.issuer!});
+      if (redirectUrl) {
+        res.redirect(303, redirectUrl);
+      } else {
+        res.status(200).json({message: 'logged out'});
+      }
+    } catch (error) {
+      sendOAuthError(res, error);
+    }
+  };
+  app.get(`${basePath}/end_session`, endSessionHandler);
+  app.post(`${basePath}/end_session`, endSessionHandler);
+
   // TODO OPT. Introspection Endpoint
-  // TODO OPT. End Session Endpoint
   // TODO OPT. Registration Endpoint
   // TODO OPT. Device Authorization Endpoint
 
@@ -163,6 +186,7 @@ export async function setupOidcRoutes(app: Application, providersConfig: Provide
   // claims store the grant flow writes to and the /userinfo endpoint reads from.
   tokenService.initialize();
   userInfoService.initialize();
+  logoutService.initialize();
   grantService.initialize();
 
   // Build routes for each OIDC provider

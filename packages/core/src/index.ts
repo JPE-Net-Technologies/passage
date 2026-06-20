@@ -54,6 +54,13 @@ export type {
   ClaimsStore,
   ClaimsVerifier,
 } from './services/oidc/userinfo.service';
+export {logoutService, LogoutService, LogoutError} from './services/oidc/logout.service';
+export type {
+  LogoutServiceInitOptions,
+  LogoutVerifier,
+  LogoutClientRegistry,
+  EndSessionParams,
+} from './services/oidc/logout.service';
 export type {
   GrantServiceOptions,
   GrantSessionStore,

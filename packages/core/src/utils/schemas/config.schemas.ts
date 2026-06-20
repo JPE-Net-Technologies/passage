@@ -47,6 +47,8 @@ export const ClientEntrySchema = z.object({
   client_type: z.enum(['public', 'confidential']),
   // Exact-match redirect URIs (correctness gate §C). At least one is required.
   redirect_uris: z.array(z.string().url()).min(1),
+  // Separately-registered post-logout redirect URIs (RP-Initiated Logout).
+  post_logout_redirect_uris: z.array(z.string().url()).optional(),
   allowed_scopes: z.array(z.string()).optional(),
   allowed_grants: z.array(z.string()).optional(),
   client_secret_ref: z.string().optional(), // KMS secret reference (confidential clients)
