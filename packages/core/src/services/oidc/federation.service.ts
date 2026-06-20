@@ -184,7 +184,7 @@ class FederationService {
    */
   async completeCallback(params: CompleteCallbackParams): Promise<{redirectUrl: string}> {
     this.ensureInitialized();
-    const {currentUrl} = params;
+    const {currentUrl, provider} = params;
 
     const state = currentUrl.searchParams.get('state');
     if (!state) {
@@ -194,6 +194,11 @@ class FederationService {
     if (!session) {
       throw new FederationError('invalid_request', 'unknown or expired session');
     }
+
+    // Resolve this provider authority's issuer up front (fail fast before minting a code) so the
+    // downstream response can carry the RFC 9207 `iss` parameter — mix-up defense for a broker
+    // that fronts multiple upstream IdPs (correctness gate §4.11 / federation manual).
+    const {issuer} = this.resolveProvider(provider);
 
     const config = this.upstream.getConfig(session.upstream_provider);
 
@@ -240,6 +245,7 @@ class FederationService {
     if (session.state !== undefined) {
       redirect.searchParams.set('state', session.state);
     }
+    redirect.searchParams.set('iss', issuer); // RFC 9207 issuer identification
     return {redirectUrl: redirect.href};
   }
 

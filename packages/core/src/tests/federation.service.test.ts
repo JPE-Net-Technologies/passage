@@ -257,6 +257,15 @@ describe('FederationService — completeCallback', () => {
     expect(u.pathname).toBe('/cb');
     expect(u.searchParams.get('code')).toBe('code-1');
     expect(u.searchParams.get('state')).toBe('dstate');
+    expect(u.searchParams.get('iss')).toBe('https://iss.test/oidc-x'); // RFC 9207 issuer identification
+  });
+
+  it('rejects a callback for a provider with no issuer configured', async () => {
+    const {service} = makeService();
+    await expectFederationError(
+      service.completeCallback({provider: provider({issuer: undefined}), currentUrl: cbUrl('sess-1')}),
+      'server_error', 'issuer',
+    );
   });
 
   it('omits the downstream state when the session has none', async () => {

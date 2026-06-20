@@ -145,6 +145,7 @@ describe('GET /:provider/callback', () => {
     expect(loc.origin + loc.pathname).toBe('https://app.test/cb');
     expect(loc.searchParams.get('code')).toBeTruthy();
     expect(loc.searchParams.get('state')).toBe('dstate');
+    expect(loc.searchParams.get('iss')).toBe('http://localhost:3000/oidc-x'); // RFC 9207
   });
 
   it('400s a callback with no state', async () => {
