@@ -150,6 +150,14 @@ describe('POST /:provider/token — authorization_code', () => {
     }).expect(401);
     expect(res.body.error).toBe('invalid_client');
   });
+
+  it('rejects a PKCE plain code_challenge_method at /authorize (only S256 is accepted)', async () => {
+    const res = await request(app).get('/oidc-x/authorize').query({
+      response_type: 'code', client_id: 'downstream', redirect_uri: 'https://app.test/cb',
+      scope: 'openid', state: 'dstate', code_challenge: CHALLENGE, code_challenge_method: 'plain',
+    }).expect(400);
+    expect(res.body.error).toBe('invalid_request');
+  });
 });
 
 describe('POST /:provider/token — confidential client authentication', () => {

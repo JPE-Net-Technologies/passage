@@ -29,7 +29,9 @@ export const GrantTypeSchema = z.enum([
     'password'
 ]);
 
-export const CodeChallengeMethodSchema = z.enum(['plain', 'S256']);
+// Only S256 is accepted: `plain` is rejected at request validation rather than failing silently at
+// /token (the grant always SHA-256s the verifier). Matches the discovery doc and the upstream leg.
+export const CodeChallengeMethodSchema = z.enum(['S256']);
 
 export const PromptSchema = z.enum(['none', 'login', 'consent', 'select_account']);
 

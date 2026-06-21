@@ -8,6 +8,8 @@ import {logger} from "../utils/logger";
 import helmet from "helmet";
 import cors from "cors";
 import compression from "compression";
+import {rateLimit} from "express-rate-limit";
+import {SecurityConfigType} from "../utils/schemas/config.schemas";
 
 /**
  * Compression predicate: honour the `x-no-compression` opt-out header, otherwise defer to
@@ -21,13 +23,24 @@ export function shouldCompress(req: express.Request, res: express.Response): boo
 }
 
 export default class CommonMiddleware extends MiddlewareComponent {
-    constructor() { super(); }
+    constructor(private readonly security: SecurityConfigType) { super(); }
 
     mount(app: express.Application): boolean {
-      // CORS
+      // Rate limiting — per-IP, from config. Mounted first so it guards every downstream route
+      // (notably the brute-forceable /token, /authorize, /callback, /revoke). `validate:false`
+      // silences express-rate-limit's dev trust-proxy check; trust proxy is set in createApp.
+      app.use(rateLimit({
+        windowMs: this.security.rateLimit.windowMs,
+        limit: this.security.rateLimit.max,
+        standardHeaders: this.security.rateLimit.standardHeaders,
+        legacyHeaders: this.security.rateLimit.legacyHeaders,
+        validate: false,
+      }));
+
+      // CORS — origins/credentials from config (no longer hardcoded).
       app.use(cors({
-        // origin: config?.cors?.origins || securityConfig.cors.origins,
-        // credentials: config?.cors?.credentials ?? securityConfig.cors.credentials,
+        origin: this.security.cors.origins,
+        credentials: this.security.cors.credentials,
         methods: ['GET', 'POST', 'OPTIONS'],
         allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
       }));

@@ -17,7 +17,9 @@ export interface TestContext {
  */
 export function buildTestConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     return {
-        security: SecurityConfigSchema.parse({cors: {}, rateLimit: {}, headers: {hsts: {}}}),
+        // High rate-limit ceiling so the multi-request test suite never trips the limiter from a
+        // single IP; tests that exercise rate limiting pass their own small `max` override.
+        security: SecurityConfigSchema.parse({cors: {}, rateLimit: {max: 1_000_000}, headers: {hsts: {}}}),
         providers: {providers: []},
         clients: {clients: []},
         ...overrides,

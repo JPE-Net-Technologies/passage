@@ -25,7 +25,7 @@ export async function createApp(config: AppConfig) {
   app.set('trust proxy', 1);
 
   // Set up middleware and routes (automatic harness to mount middleware and routes)
-  setupMiddleware(app);
+  setupMiddleware(app, config.security);
   await setupRoutes(app, config);
 
   logger.info('Passage server instance created...', {
