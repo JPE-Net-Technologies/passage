@@ -7,6 +7,7 @@ import {federationService, FederationError} from "../services/oidc/federation.se
 import {tokenService} from "../services/oidc/token.service";
 import {grantService, GrantError} from "../services/oidc/grant.service";
 import {clientRegistry} from "../services/oidc/client-registry.service";
+import {extractClientCredentials, authenticateClient, ClientAuthError} from "../services/oidc/client-auth.service";
 import {userInfoService, UserInfoError, extractBearerToken} from "../services/oidc/userinfo.service";
 import {logoutService, LogoutError} from "../services/oidc/logout.service";
 import {buildDiscoveryDocument} from "../services/oidc/discovery.service";
@@ -18,6 +19,19 @@ const statusFor = (code: string): number => (code === 'server_error' ? 500 : 400
 
 /** Send an OAuth error response; a FederationError/GrantError/LogoutError carries its own code, anything else is a server_error. */
 function sendOAuthError(res: Response, error: unknown): void {
+  // A failed client authentication is an HTTP-status concern: invalid_client is 401, and when the
+  // client attempted HTTP Basic the response carries a WWW-Authenticate challenge (RFC 6749 §5.2).
+  if (error instanceof ClientAuthError) {
+    if (error.code === 'invalid_client') {
+      if (error.usedBasic) {
+        res.set('WWW-Authenticate', 'Basic');
+      }
+      res.status(401).json({error: 'invalid_client'});
+      return;
+    }
+    res.status(statusFor(error.code)).json({error: error.code});
+    return;
+  }
   const code = error instanceof FederationError || error instanceof GrantError || error instanceof LogoutError ? error.code : 'server_error';
   res.status(statusFor(code)).json({error: code});
 }
@@ -79,14 +93,24 @@ function attachOidcProvider(app: Application, provider: ProviderEntryType) {
 
   // Token Endpoint - redeem an authorization code or rotate a refresh token into Passage-signed tokens.
   app.post(`${basePath}/token`, async (req, res) => {
-    // TODO(client-auth, Phase 3): the client is not authenticated (no client registry). The grant binds
-    // the code to its client_id/redirect_uri but does not verify a client secret.
     const parsed = TokenRequestSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({error: 'invalid_request'});
       return;
     }
     try {
+      // Authenticate the downstream client before issuing tokens: confidential clients must present a
+      // registered secret (Basic or post), public clients use `none`. The grant separately binds the
+      // code to its client_id/redirect_uri (gate §G); this proves client identity (RFC 6749 §3.2.1).
+      const client = clientRegistry.getClient(parsed.data.client_id);
+      if (!client) {
+        throw new ClientAuthError('invalid_client', 'unknown client');
+      }
+      authenticateClient(client, extractClientCredentials(req.headers.authorization, req.body));
+      // Per-client grant policy: a client may be restricted to a subset of grant types.
+      if (client.allowed_grants && !client.allowed_grants.includes(parsed.data.grant_type)) {
+        throw new GrantError('unauthorized_client', `grant_type ${parsed.data.grant_type} not allowed for this client`);
+      }
       const tokens = await grantService.exchange(provider, parsed.data);
       res.set('Cache-Control', 'no-store').json(tokens); // RFC 6749 §5.1 — token responses must not be cached
     } catch (error) {
@@ -112,16 +136,27 @@ function attachOidcProvider(app: Application, provider: ProviderEntryType) {
   app.get(`${basePath}/userinfo`, userInfoHandler);
   app.post(`${basePath}/userinfo`, userInfoHandler);
 
-  // Revocation Endpoint (RFC 7009) - revoke a refresh token (and its whole family). Always 200.
+  // Revocation Endpoint (RFC 7009) - authenticate the client, then revoke a refresh token (and its
+  // whole family). An unknown/foreign token is a silent no-op, but a 200 is only reached once the
+  // client has been authenticated (RFC 7009 §2.1).
   app.post(`${basePath}/revoke`, (req, res) => {
-    // TODO(client-auth, Inc 8): the revocation endpoint should authenticate the client (RFC 7009 §2.1).
     const token = req.body.token; // body is always an object (express.urlencoded is mounted)
     if (!token) {
       res.status(400).json({error: 'invalid_request'});
       return;
     }
-    grantService.revoke(token);
-    res.status(200).end();
+    try {
+      const creds = extractClientCredentials(req.headers.authorization, req.body);
+      const client = creds.client_id ? clientRegistry.getClient(creds.client_id) : undefined;
+      if (!client) {
+        throw new ClientAuthError('invalid_client', 'unknown or unidentified client', creds.usedBasic);
+      }
+      authenticateClient(client, creds);
+      grantService.revoke(token);
+      res.status(200).end();
+    } catch (error) {
+      sendOAuthError(res, error);
+    }
   });
 
   // End Session Endpoint (RP-Initiated Logout) - validate the request, then redirect to a registered

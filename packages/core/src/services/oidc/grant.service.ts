@@ -13,7 +13,8 @@
 // 100% line + 100% mutation gates. All collaborators are injectable seams; the only
 // non-determinism owned here is `mintSubject` (clock/id/jti are delegated to the
 // session and token services).
-import {createHash, timingSafeEqual} from 'node:crypto';
+import {createHash} from 'node:crypto';
+import {constantTimeEqual} from '../../utils/constant-time';
 import {sessionService} from './session.service';
 import {tokenService} from './token.service';
 import type {AccessTokenInput, IdTokenInput} from './token.service';
@@ -51,16 +52,6 @@ export type SubjectMapper = (sectorId: string, upstreamSubject: string) => strin
  */
 export const defaultSubjectMapper: SubjectMapper = (sectorId, upstreamSubject) =>
   createHash('sha256').update(sectorId + '|' + upstreamSubject).digest('base64url');
-
-/** Constant-time string compare that returns false (never throws) on a length mismatch. */
-function constantTimeEqual(a: string, b: string): boolean {
-  const ab = Buffer.from(a);
-  const bb = Buffer.from(b);
-  if (ab.length !== bb.length) {
-    return false;
-  }
-  return timingSafeEqual(ab, bb);
-}
 
 /** The slice of sessionService the grant flow depends on. */
 export interface GrantSessionStore {

@@ -144,6 +144,19 @@ class FederationService {
     if (!client.redirect_uris.includes(request.redirect_uri)) {
       throw new FederationError('invalid_request', 'redirect_uri not registered');
     }
+    // Per-client downstream-leg policy. PKCE is enforced before the session/redirect so a client
+    // configured to require it cannot start a flow without a code_challenge. When allowed_scopes is
+    // configured, every requested scope must be in it (configs must therefore include `openid`).
+    if (client.pkce_required && !request.code_challenge) {
+      throw new FederationError('invalid_request', 'PKCE is required for this client');
+    }
+    if (client.allowed_scopes) {
+      for (const requested of request.scope.split(' ')) {
+        if (!client.allowed_scopes.includes(requested)) {
+          throw new FederationError('invalid_scope', `scope not allowed for this client: ${requested}`);
+        }
+      }
+    }
 
     const {issuer, scope} = this.resolveProvider(provider);
     const config = this.upstream.getConfig(provider.name);

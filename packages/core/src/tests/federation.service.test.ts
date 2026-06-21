@@ -192,6 +192,50 @@ describe('FederationService — beginAuthorization', () => {
     expect(captured.createSessionInput).toBeUndefined();
   });
 
+  it('rejects a client that requires PKCE when no code_challenge is present', async () => {
+    const {service, captured} = makeService({
+      clients: {getClient: () => ({client_id: 'downstream', client_type: 'public', redirect_uris: ['https://app.test/cb'], pkce_required: true})},
+    });
+    await expectFederationError(
+      service.beginAuthorization({provider: provider(), request: authRequest({code_challenge: undefined, code_challenge_method: undefined})}),
+      'invalid_request', 'PKCE is required',
+    );
+    expect(captured.createSessionInput).toBeUndefined();
+  });
+
+  it('allows a PKCE-required client when a code_challenge is present', async () => {
+    const {service} = makeService({
+      clients: {getClient: () => ({client_id: 'downstream', client_type: 'public', redirect_uris: ['https://app.test/cb'], pkce_required: true})},
+    });
+    const {redirectUrl} = await service.beginAuthorization({provider: provider(), request: authRequest()});
+    expect(redirectUrl).toBe('https://up.test/auth?x=1');
+  });
+
+  it('rejects a requested scope outside the client allowed_scopes', async () => {
+    const {service, captured} = makeService({
+      clients: {getClient: () => ({client_id: 'downstream', client_type: 'public', redirect_uris: ['https://app.test/cb'], allowed_scopes: ['openid']})},
+    });
+    await expectFederationError(
+      service.beginAuthorization({provider: provider(), request: authRequest({scope: 'openid profile'})}),
+      'invalid_scope', 'profile',
+    );
+    expect(captured.createSessionInput).toBeUndefined();
+  });
+
+  it('allows requested scopes that are all within allowed_scopes', async () => {
+    const {service} = makeService({
+      clients: {getClient: () => ({client_id: 'downstream', client_type: 'public', redirect_uris: ['https://app.test/cb'], allowed_scopes: ['openid', 'profile']})},
+    });
+    const {redirectUrl} = await service.beginAuthorization({provider: provider(), request: authRequest({scope: 'openid profile'})});
+    expect(redirectUrl).toBe('https://up.test/auth?x=1');
+  });
+
+  it('does not restrict scopes when allowed_scopes is not configured', async () => {
+    const {service} = makeService(); // default client has no allowed_scopes
+    const {redirectUrl} = await service.beginAuthorization({provider: provider(), request: authRequest({scope: 'openid profile email'})});
+    expect(redirectUrl).toBe('https://up.test/auth?x=1');
+  });
+
   it('defaults the upstream scope to "openid" when none configured', async () => {
     const undef = makeService();
     await undef.service.beginAuthorization({provider: provider({upstream_scopes: undefined}), request: authRequest()});

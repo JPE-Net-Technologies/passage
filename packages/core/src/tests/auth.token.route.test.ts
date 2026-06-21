@@ -44,11 +44,18 @@ const VERIFIER = 'a'.repeat(43);
 const CHALLENGE = createHash('sha256').update(VERIFIER).digest('base64url');
 const decodeJwt = (jwt: string) => JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url').toString());
 
+// A confidential downstream client and the secret LocalKMS resolves for it (by secret name).
+const WEB_SECRET = 'web-client-secret';
+const basicAuth = (id: string, secret: string) => `Basic ${Buffer.from(`${id}:${secret}`).toString('base64')}`;
+
 let app: any;
 
 beforeAll(async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'passage-token-'));
-  fs.writeFileSync(path.join(dir, 'template.secrets.yaml'), 'Secrets: []\n');
+  fs.writeFileSync(
+    path.join(dir, 'template.secrets.yaml'),
+    `Secrets:\n  - name: WebClientSecret\n    provider: Passage.LocalKms\n    reference: WebClientSecret\n    unencryptedValue: "${WEB_SECRET}"\n`,
+  );
   localKMS.reset();
   await localKMS.initialize({keystorePath: path.join(dir, 'kms-local.keystore'), secretsPath: path.join(dir, 'template.secrets.yaml')});
   upstreamOidc.reset();
@@ -61,7 +68,13 @@ beforeAll(async () => {
   grantService.reset();
   app = await createApp(buildTestConfig({
     providers: {providers: [oidcProvider() as any]},
-    clients: {clients: [{client_id: 'downstream', client_type: 'public', redirect_uris: ['https://app.test/cb']}]},
+    clients: {clients: [
+      {client_id: 'downstream', client_type: 'public', redirect_uris: ['https://app.test/cb']},
+      {
+        client_id: 'web', client_type: 'confidential', redirect_uris: ['https://web.test/cb'],
+        client_secret_ref: 'WebClientSecret', allowed_grants: ['authorization_code'],
+      },
+    ]},
   }));
 });
 
@@ -70,6 +83,16 @@ async function obtainCode(): Promise<string> {
   const begin = await request(app).get('/oidc-x/authorize').query({
     response_type: 'code', client_id: 'downstream', redirect_uri: 'https://app.test/cb',
     scope: 'openid', state: 'dstate', code_challenge: CHALLENGE, code_challenge_method: 'S256',
+  }).expect(303);
+  const sessionId = new URL(begin.headers.location).searchParams.get('state')!;
+  const cb = await request(app).get('/oidc-x/callback').query({state: sessionId, code: 'upstream-code'}).expect(303);
+  return new URL(cb.headers.location).searchParams.get('code')!;
+}
+
+/** Obtain a redeemable code for the confidential `web` client (no PKCE; it does not require it). */
+async function obtainWebCode(): Promise<string> {
+  const begin = await request(app).get('/oidc-x/authorize').query({
+    response_type: 'code', client_id: 'web', redirect_uri: 'https://web.test/cb', scope: 'openid', state: 'wstate',
   }).expect(303);
   const sessionId = new URL(begin.headers.location).searchParams.get('state')!;
   const cb = await request(app).get('/oidc-x/callback').query({state: sessionId, code: 'upstream-code'}).expect(303);
@@ -120,6 +143,76 @@ describe('POST /:provider/token — authorization_code', () => {
     }).expect(400);
     expect(res.body.error).toBe('invalid_grant');
   });
+
+  it('invalid_client for an unregistered client_id', async () => {
+    const res = await request(app).post('/oidc-x/token').type('form').send({
+      grant_type: 'authorization_code', code: 'x', redirect_uri: 'https://app.test/cb', client_id: 'ghost', code_verifier: VERIFIER,
+    }).expect(401);
+    expect(res.body.error).toBe('invalid_client');
+  });
+});
+
+describe('POST /:provider/token — confidential client authentication', () => {
+  it('authenticates a confidential client via client_secret_basic', async () => {
+    const code = await obtainWebCode();
+    const res = await request(app).post('/oidc-x/token').set('Authorization', basicAuth('web', WEB_SECRET)).type('form').send({
+      grant_type: 'authorization_code', code, redirect_uri: 'https://web.test/cb', client_id: 'web',
+    }).expect(200);
+    expect(res.body.token_type).toBe('Bearer');
+  });
+
+  it('authenticates a confidential client via client_secret_post', async () => {
+    const code = await obtainWebCode();
+    const res = await request(app).post('/oidc-x/token').type('form').send({
+      grant_type: 'authorization_code', code, redirect_uri: 'https://web.test/cb', client_id: 'web', client_secret: WEB_SECRET,
+    }).expect(200);
+    expect(res.body.token_type).toBe('Bearer');
+  });
+
+  it('rejects a wrong secret with 401 invalid_client and a Basic challenge', async () => {
+    const code = await obtainWebCode();
+    const res = await request(app).post('/oidc-x/token').set('Authorization', basicAuth('web', 'nope')).type('form').send({
+      grant_type: 'authorization_code', code, redirect_uri: 'https://web.test/cb', client_id: 'web',
+    }).expect(401);
+    expect(res.body.error).toBe('invalid_client');
+    expect(res.headers['www-authenticate']).toBe('Basic');
+  });
+
+  it('rejects a confidential client that sends no credentials', async () => {
+    const code = await obtainWebCode();
+    const res = await request(app).post('/oidc-x/token').type('form').send({
+      grant_type: 'authorization_code', code, redirect_uri: 'https://web.test/cb', client_id: 'web',
+    }).expect(401);
+    expect(res.body.error).toBe('invalid_client');
+    expect(res.headers['www-authenticate']).toBeUndefined();
+  });
+
+  it('rejects a public client that presents a secret', async () => {
+    const code = await obtainCode();
+    const res = await request(app).post('/oidc-x/token').type('form').send({
+      grant_type: 'authorization_code', code, redirect_uri: 'https://app.test/cb', client_id: 'downstream', code_verifier: VERIFIER, client_secret: 'unexpected',
+    }).expect(401);
+    expect(res.body.error).toBe('invalid_client');
+  });
+
+  it('400 invalid_request when both Basic and a body secret are presented', async () => {
+    const res = await request(app).post('/oidc-x/token').set('Authorization', basicAuth('web', WEB_SECRET)).type('form').send({
+      grant_type: 'authorization_code', code: 'x', redirect_uri: 'https://web.test/cb', client_id: 'web', client_secret: WEB_SECRET,
+    }).expect(400);
+    expect(res.body.error).toBe('invalid_request');
+  });
+
+  it('unauthorized_client when the grant_type is outside allowed_grants', async () => {
+    // `web` allows only authorization_code; a refresh_token grant is rejected after auth succeeds.
+    const code = await obtainWebCode();
+    const issued = await request(app).post('/oidc-x/token').type('form').send({
+      grant_type: 'authorization_code', code, redirect_uri: 'https://web.test/cb', client_id: 'web', client_secret: WEB_SECRET,
+    }).expect(200);
+    const res = await request(app).post('/oidc-x/token').type('form').send({
+      grant_type: 'refresh_token', refresh_token: issued.body.refresh_token, client_id: 'web', client_secret: WEB_SECRET,
+    }).expect(400);
+    expect(res.body.error).toBe('unauthorized_client');
+  });
 });
 
 describe('POST /:provider/revoke', () => {
@@ -130,7 +223,7 @@ describe('POST /:provider/revoke', () => {
     }).expect(200);
     const rt = first.body.refresh_token;
 
-    await request(app).post('/oidc-x/revoke').type('form').send({token: rt}).expect(200);
+    await request(app).post('/oidc-x/revoke').type('form').send({token: rt, client_id: 'downstream'}).expect(200);
 
     // the revoked token's family is dead → a refresh with it is rejected
     const refused = await request(app).post('/oidc-x/token').type('form').send({
@@ -139,13 +232,28 @@ describe('POST /:provider/revoke', () => {
     expect(refused.body.error).toBe('invalid_grant');
   });
 
+  it('authenticates a confidential client at /revoke (200)', async () => {
+    await request(app).post('/oidc-x/revoke').set('Authorization', basicAuth('web', WEB_SECRET))
+      .type('form').send({token: 'whatever', client_id: 'web'}).expect(200);
+  });
+
+  it('401 invalid_client when a confidential client revokes with a wrong secret', async () => {
+    const res = await request(app).post('/oidc-x/revoke').type('form').send({token: 'whatever', client_id: 'web', client_secret: 'nope'}).expect(401);
+    expect(res.body.error).toBe('invalid_client');
+  });
+
+  it('401 invalid_client when no client is identified', async () => {
+    const res = await request(app).post('/oidc-x/revoke').type('form').send({token: 'not-a-real-token'}).expect(401);
+    expect(res.body.error).toBe('invalid_client');
+  });
+
   it('400s a revocation with no token', async () => {
     const res = await request(app).post('/oidc-x/revoke').type('form').send({}).expect(400);
     expect(res.body.error).toBe('invalid_request');
   });
 
-  it('200s an unknown token (silent no-op)', async () => {
-    await request(app).post('/oidc-x/revoke').type('form').send({token: 'not-a-real-token'}).expect(200);
+  it('200s an unknown token from an authenticated client (silent no-op)', async () => {
+    await request(app).post('/oidc-x/revoke').type('form').send({token: 'not-a-real-token', client_id: 'downstream'}).expect(200);
   });
 });
 
