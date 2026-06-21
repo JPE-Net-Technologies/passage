@@ -38,6 +38,7 @@ export interface OIDCDiscoveryDocument {
     // Logout + token-management endpoints
     end_session_endpoint?: string;
     revocation_endpoint?: string;
+    introspection_endpoint?: string;
 
     // Additional metadata
     service_documentation?: string;
@@ -329,6 +330,23 @@ export interface AccessTokenClaims {
     client_id: string;
     scope?: string;
     [key: string]: unknown;
+}
+
+/**
+ * Token introspection response (RFC 7662 §2.2). `active` is the only required member; an inactive
+ * (unknown / expired / revoked / not-the-caller's) token is reported as just `{active: false}`.
+ */
+export interface IntrospectionResponse {
+    active: boolean;
+    scope?: string;
+    client_id?: string;
+    sub?: string;
+    aud?: string | string[];
+    iss?: string;
+    exp?: number;
+    iat?: number;
+    jti?: string;
+    token_type?: string;
 }
 
 // =============================================================================

@@ -21,6 +21,7 @@ describe('buildDiscoveryDocument', () => {
       userinfo_endpoint: 'https://iss.test/oidc-x/userinfo',
       jwks_uri: 'https://iss.test/oidc-x/jwks',
       revocation_endpoint: 'https://iss.test/oidc-x/revoke',
+      introspection_endpoint: 'https://iss.test/oidc-x/introspect',
       end_session_endpoint: 'https://iss.test/oidc-x/end_session',
       response_types_supported: ['code'],
       subject_types_supported: ['public'],

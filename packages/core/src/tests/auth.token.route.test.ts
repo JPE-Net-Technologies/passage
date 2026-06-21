@@ -223,6 +223,56 @@ describe('POST /:provider/token — confidential client authentication', () => {
   });
 });
 
+describe('POST /:provider/introspect', () => {
+  /** Issue an access+refresh token to the confidential `web` client. */
+  async function issueWebTokens() {
+    const code = await obtainWebCode();
+    const res = await request(app).post('/oidc-x/token').type('form').send({
+      grant_type: 'authorization_code', code, redirect_uri: 'https://web.test/cb', client_id: 'web', client_secret: WEB_SECRET,
+    }).expect(200);
+    return res.body as {access_token: string; refresh_token: string};
+  }
+
+  it('reports a confidential client’s own access token as active (client_secret_basic)', async () => {
+    const {access_token} = await issueWebTokens();
+    const res = await request(app).post('/oidc-x/introspect').set('Authorization', basicAuth('web', WEB_SECRET))
+      .type('form').send({token: access_token}).expect(200);
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(res.body.active).toBe(true);
+    expect(res.body.client_id).toBe('web');
+    expect(res.body.token_type).toBe('Bearer');
+    expect(typeof res.body.sub).toBe('string');
+  });
+
+  it('reports a live refresh token as active', async () => {
+    const {refresh_token} = await issueWebTokens();
+    const res = await request(app).post('/oidc-x/introspect')
+      .type('form').send({token: refresh_token, client_id: 'web', client_secret: WEB_SECRET}).expect(200);
+    expect(res.body.active).toBe(true);
+    expect(res.body.client_id).toBe('web');
+  });
+
+  it('reports another client’s token as inactive (anti-oracle)', async () => {
+    const {access_token} = await issueWebTokens();
+    // The public `downstream` client introspects `web`'s token — must not be revealed.
+    const res = await request(app).post('/oidc-x/introspect')
+      .type('form').send({token: access_token, client_id: 'downstream'}).expect(200);
+    expect(res.body).toEqual({active: false});
+  });
+
+  it('401 invalid_client when the caller authentication fails', async () => {
+    const res = await request(app).post('/oidc-x/introspect')
+      .type('form').send({token: 'x', client_id: 'web', client_secret: 'wrong'}).expect(401);
+    expect(res.body.error).toBe('invalid_client');
+  });
+
+  it('400 invalid_request when token is missing', async () => {
+    const res = await request(app).post('/oidc-x/introspect')
+      .type('form').send({client_id: 'downstream'}).expect(400);
+    expect(res.body.error).toBe('invalid_request');
+  });
+});
+
 describe('POST /:provider/revoke', () => {
   it('revokes a refresh token so it can no longer be used (200)', async () => {
     const code = await obtainCode();

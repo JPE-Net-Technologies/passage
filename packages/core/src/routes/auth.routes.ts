@@ -6,12 +6,13 @@ import {sessionService} from "../services/oidc/session.service";
 import {federationService, FederationError} from "../services/oidc/federation.service";
 import {tokenService} from "../services/oidc/token.service";
 import {grantService, GrantError} from "../services/oidc/grant.service";
+import {introspectService} from "../services/oidc/introspect.service";
 import {clientRegistry} from "../services/oidc/client-registry.service";
 import {extractClientCredentials, authenticateClient, ClientAuthError} from "../services/oidc/client-auth.service";
 import {userInfoService, UserInfoError, extractBearerToken} from "../services/oidc/userinfo.service";
 import {logoutService, LogoutError} from "../services/oidc/logout.service";
 import {buildDiscoveryDocument} from "../services/oidc/discovery.service";
-import {AuthorizationRequestSchema, TokenRequestSchema, LogoutRequestSchema} from "../utils/schemas/oidc.schemas";
+import {AuthorizationRequestSchema, TokenRequestSchema, LogoutRequestSchema, IntrospectionRequestSchema} from "../utils/schemas/oidc.schemas";
 import {logger} from "../utils/logger";
 
 /** Map an OAuth error code to an HTTP status (server_error ⇒ 500, client errors ⇒ 400). */
@@ -182,7 +183,32 @@ function attachOidcProvider(app: Application, provider: ProviderEntryType) {
   app.get(`${basePath}/end_session`, endSessionHandler);
   app.post(`${basePath}/end_session`, endSessionHandler);
 
-  // TODO OPT. Introspection Endpoint
+  // Introspection Endpoint (RFC 7662) - authenticate the client, then report whether a token is active.
+  // Only the caller's OWN tokens are revealed (an unknown/foreign token is reported `{active:false}`,
+  // never an error) so the endpoint cannot be used as a token-scanning oracle (§2.2).
+  app.post(`${basePath}/introspect`, async (req, res) => {
+    const parsed = IntrospectionRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({error: 'invalid_request'});
+      return;
+    }
+    try {
+      const creds = extractClientCredentials(req.headers.authorization, req.body);
+      const client = creds.client_id ? clientRegistry.getClient(creds.client_id) : undefined;
+      if (!client) {
+        throw new ClientAuthError('invalid_client', 'unknown or unidentified client', creds.usedBasic);
+      }
+      authenticateClient(client, creds);
+      const result = await introspectService.introspect(parsed.data.token, {
+        expectedIssuer: provider.OidcConfig!.issuer!,
+        callerClientId: client.client_id,
+      });
+      res.set('Cache-Control', 'no-store').json(result); // RFC 7662 §2.2 — must not be cached
+    } catch (error) {
+      sendOAuthError(res, error);
+    }
+  });
+
   // TODO OPT. Registration Endpoint
   // TODO OPT. Device Authorization Endpoint
 
@@ -223,6 +249,7 @@ export async function setupOidcRoutes(app: Application, providersConfig: Provide
   userInfoService.initialize();
   logoutService.initialize();
   grantService.initialize();
+  introspectService.initialize();
 
   // Build routes for each OIDC provider
   for (const provider of oidcProviders) {

@@ -148,6 +148,19 @@ export type TokenRequestInput = z.input<typeof TokenRequestSchema>;
 export type TokenRequestValidated = z.output<typeof TokenRequestSchema>;
 
 // =============================================================================
+// Introspection Request Schema (RFC 7662)
+// =============================================================================
+
+// Only `token` is required. `token_type_hint` is accepted but ignored (RFC 7662 §2.1 permits this;
+// both token kinds are always checked). Client credentials in the body are read by client auth, not here.
+export const IntrospectionRequestSchema = z.object({
+    token: z.string().min(1, 'token is required'),
+    token_type_hint: z.string().optional(),
+});
+
+export type IntrospectionRequestValidated = z.output<typeof IntrospectionRequestSchema>;
+
+// =============================================================================
 // Token Response Schema
 // =============================================================================
 
